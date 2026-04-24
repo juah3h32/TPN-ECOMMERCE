@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -17,9 +17,11 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCart } from "../context/CartContext";
 import { useAuth } from "../context/AuthContext";
+import { useTheme } from "../context/ThemeContext";
 import { useWishlist } from "../context/WishlistContext";
 import { MOBILE_HEADER_FIXED } from "./HomeScreen";
 import { getCategories, getProducts } from "../services/api";
+import LoginPromptSheet from "../components/LoginPromptSheet";
 import ProductDetailModal from "../components/ProductDetailModal";
 
 const RED = "#e6192e";
@@ -60,24 +62,37 @@ const SORT_OPTIONS = ["Relevancia", "Menor precio", "Mayor precio", "Más nuevo"
 function ProductCardMobile({ item, cardWidth, onPress }) {
   const { addToCart, items } = useCart();
   const { toggleWishlist, isWishlisted } = useWishlist();
+  const { t } = useTheme();
   const [added, setAdded] = useState(false);
   const [qty, setQty] = useState(1);
   const [limitMsg, setLimitMsg] = useState("");
+  const [showLogin, setShowLogin] = useState(false);
 
-  const inCart = items.find((i) => i.id === item.id)?.qty ?? 0;
-  const agotado = item.stock !== null && item.stock === 0;
-  const atMax = item.stock !== null && inCart >= item.stock;
+  const stockTracked = item.stock !== null && item.stock !== undefined;
+  const isUnlimited  = item.stock === -1;
+  const inCart    = items.find((i) => i.id === item.id)?.qty ?? 0;
+  const available = isUnlimited ? Infinity : (stockTracked ? Math.max(0, item.stock - inCart) : Infinity);
+  const agotado   = !isUnlimited && stockTracked && item.stock === 0;
+  const atMax     = !isUnlimited && stockTracked && inCart >= item.stock;
   const wishlisted = isWishlisted(item.id);
+
+  // Corregir qty si el carrito se actualizó y ya no hay suficiente disponible
+  useEffect(() => {
+    if (!isUnlimited && stockTracked && qty > available && available >= 1) setQty(available);
+    if (!isUnlimited && stockTracked && available === 0) setQty(1);
+  }, [available, stockTracked, isUnlimited]);
 
   const handleAdd = () => {
     const r = addToCart(item, qty);
+    if (r.authRequired) { setShowLogin(true); return; }
     if (!r.ok) { setLimitMsg(r.message); setTimeout(() => setLimitMsg(""), 2500); return; }
     setAdded(true);
     setTimeout(() => { setAdded(false); setQty(1); }, 900);
   };
 
   return (
-    <TouchableOpacity style={[styles.cardMobile, { width: cardWidth }]} onPress={onPress} activeOpacity={0.88}>
+    <>
+    <TouchableOpacity style={[styles.cardMobile, { width: cardWidth, backgroundColor: t.card }]} onPress={onPress} activeOpacity={0.88}>
       {item.promo && (
         <View style={styles.badge}>
           <Text style={styles.badgeText}>{item.promo}</Text>
@@ -91,32 +106,45 @@ function ProductCardMobile({ item, cardWidth, onPress }) {
       >
         <Ionicons name={wishlisted ? "heart" : "heart-outline"} size={15} color={wishlisted ? RED : "#bbb"} />
       </TouchableOpacity>
-      <View style={styles.imgWrap}>
+      <View style={[styles.imgWrap, { backgroundColor: "#fff" }]}>
         <Image source={{ uri: item.img }} style={styles.img} resizeMode="contain" />
       </View>
-      <Text style={styles.catLabel}>{item.cat}</Text>
-      <Text style={styles.cardName} numberOfLines={1}>{item.name}</Text>
+      <Text style={[styles.catLabel, { color: t.textMuted }]}>{item.cat}</Text>
+      <Text style={[styles.cardName, { color: t.text }]} numberOfLines={1}>{item.name}</Text>
       <Text style={styles.cardPrice}>{item.price}</Text>
+      {stockTracked && item.stock > 0 && item.stock <= 5 && (
+        <Text style={{ fontSize: 9, color: "#e65100", fontWeight: "700", marginTop: 1 }}>
+          ¡Solo quedan {item.stock}!
+        </Text>
+      )}
       {limitMsg ? (
         <Text style={{ fontSize: 9, color: "#e65100", marginTop: 2 }} numberOfLines={2}>{limitMsg}</Text>
       ) : null}
       {/* Footer: qty controls + add button */}
       <View style={styles.mobileCardFooter}>
-        <View style={styles.mobileQtyRow}>
+        <View style={[styles.mobileQtyRow, { backgroundColor: t.iconBg }]}>
           <TouchableOpacity
-            style={styles.mobileQtyBtn}
+            style={[styles.mobileQtyBtn, { backgroundColor: t.card }]}
             onPress={(e) => { e.stopPropagation?.(); setQty(q => Math.max(1, q - 1)); }}
             activeOpacity={0.7}
           >
-            <Text style={styles.mobileQtyBtnText}>−</Text>
+            <Text style={[styles.mobileQtyBtnText, { color: t.text }]}>−</Text>
           </TouchableOpacity>
-          <Text style={styles.mobileQtyText}>{qty}</Text>
+          <Text style={[styles.mobileQtyText, { color: t.text }]}>{qty}</Text>
           <TouchableOpacity
-            style={styles.mobileQtyBtn}
-            onPress={(e) => { e.stopPropagation?.(); setQty(q => q + 1); }}
+            style={[styles.mobileQtyBtn, { backgroundColor: t.card }, (atMax || qty >= available) && { opacity: 0.35 }]}
+            onPress={(e) => {
+              e.stopPropagation?.();
+              if (stockTracked && qty >= available) {
+                setLimitMsg("Stock máximo alcanzado");
+                setTimeout(() => setLimitMsg(""), 2000);
+                return;
+              }
+              setQty(q => q + 1);
+            }}
             activeOpacity={0.7}
           >
-            <Text style={styles.mobileQtyBtnText}>+</Text>
+            <Text style={[styles.mobileQtyBtnText, { color: t.text }]}>+</Text>
           </TouchableOpacity>
         </View>
         <TouchableOpacity
@@ -129,26 +157,45 @@ function ProductCardMobile({ item, cardWidth, onPress }) {
         </TouchableOpacity>
       </View>
     </TouchableOpacity>
+    <LoginPromptSheet visible={showLogin} onClose={() => setShowLogin(false)} />
+    </>
   );
 }
 
 // ─── PRODUCT CARD DESKTOP ─────────────────────────────────────────────────────
 function ProductCardDesktop({ item, onPress }) {
-  const { addToCart } = useCart();
+  const { addToCart, items } = useCart();
   const { toggleWishlist, isWishlisted } = useWishlist();
-  const [added, setAdded] = useState(false);
-  const [qty, setQty] = useState(1);
+  const { t } = useTheme();
+  const [added, setAdded]       = useState(false);
+  const [qty, setQty]           = useState(1);
+  const [limitMsg, setLimitMsg] = useState("");
+  const [showLogin, setShowLogin] = useState(false);
 
+  const stockTracked = item.stock !== null && item.stock !== undefined;
+  const isUnlimited  = item.stock === -1;
+  const inCart    = items.find((i) => i.id === item.id)?.qty ?? 0;
+  const available = isUnlimited ? Infinity : (stockTracked ? Math.max(0, item.stock - inCart) : Infinity);
+  const agotado   = !isUnlimited && stockTracked && item.stock === 0;
+  const atMax     = !isUnlimited && stockTracked && inCart >= item.stock;
   const wishlisted = isWishlisted(item.id);
 
+  useEffect(() => {
+    if (!isUnlimited && stockTracked && qty > available && available >= 1) setQty(available);
+    if (!isUnlimited && stockTracked && available === 0) setQty(1);
+  }, [available, stockTracked, isUnlimited]);
+
   const handleAdd = () => {
-    for (let i = 0; i < qty; i++) addToCart(item);
+    const r = addToCart(item, qty);
+    if (r.authRequired) { setShowLogin(true); return; }
+    if (!r.ok) { setLimitMsg(r.message); setTimeout(() => setLimitMsg(""), 2500); return; }
     setAdded(true);
-    setTimeout(() => setAdded(false), 1000);
+    setTimeout(() => { setAdded(false); setQty(1); }, 1000);
   };
 
   return (
-    <TouchableOpacity style={styles.cardDesktop} onPress={onPress} activeOpacity={0.9}>
+    <>
+    <TouchableOpacity style={[styles.cardDesktop, { backgroundColor: t.card }]} onPress={onPress} activeOpacity={0.9}>
       {item.promo && (
         <View style={styles.badge}>
           <Text style={styles.badgeText}>{item.promo}</Text>
@@ -161,36 +208,60 @@ function ProductCardDesktop({ item, onPress }) {
       >
         <Ionicons name={wishlisted ? "heart" : "heart-outline"} size={16} color={wishlisted ? RED : "#ccc"} />
       </TouchableOpacity>
-      <View style={styles.imgWrapDesktop}>
+      <View style={[styles.imgWrapDesktop, { backgroundColor: "#fff" }]}>
         <Image source={{ uri: item.img }} style={styles.imgDesktop} resizeMode="contain" />
       </View>
-      <Text style={styles.catLabelDesktop}>{item.cat}</Text>
-      <Text style={styles.cardNameDesktop} numberOfLines={2}>{item.name}</Text>
+      <Text style={[styles.catLabelDesktop, { color: t.textMuted }]}>{item.cat}</Text>
+      <Text style={[styles.cardNameDesktop, { color: t.text }]} numberOfLines={2}>{item.name}</Text>
       <Text style={styles.cardPriceDesktop}>{item.price}</Text>
+      {stockTracked && item.stock > 0 && item.stock <= 5 && (
+        <Text style={{ fontSize: 10, color: "#e65100", fontWeight: "700", marginBottom: 2 }}>
+          ¡Solo quedan {item.stock}!
+        </Text>
+      )}
+      {limitMsg ? (
+        <Text style={{ fontSize: 10, color: "#e65100", marginBottom: 2 }} numberOfLines={2}>{limitMsg}</Text>
+      ) : null}
 
       {/* Controles cantidad + botón agregar */}
       <View style={styles.cardFooterDesktop}>
-        <View style={styles.qtyRow}>
+        <View style={[styles.qtyRow, { backgroundColor: t.iconBg }]}>
           <TouchableOpacity
             style={styles.qtyBtn}
-            onPress={() => setQty(Math.max(1, qty - 1))}
+            onPress={() => setQty(q => Math.max(1, q - 1))}
           >
-            <Ionicons name="remove" size={14} color="#555" />
+            <Ionicons name="remove" size={14} color={t.textMuted} />
           </TouchableOpacity>
-          <Text style={styles.qtyText}>{qty}</Text>
-          <TouchableOpacity style={styles.qtyBtn} onPress={() => setQty(qty + 1)}>
-            <Ionicons name="add" size={14} color="#555" />
+          <Text style={[styles.qtyText, { color: t.text }]}>{qty}</Text>
+          <TouchableOpacity
+            style={[styles.qtyBtn, (atMax || qty >= available) && { opacity: 0.35 }]}
+            onPress={() => {
+              if (stockTracked && qty >= available) {
+                setLimitMsg("Stock máximo alcanzado");
+                setTimeout(() => setLimitMsg(""), 2000);
+                return;
+              }
+              setQty(q => q + 1);
+            }}
+          >
+            <Ionicons name="add" size={14} color={atMax || qty >= available ? "#aaa" : "#555"} />
           </TouchableOpacity>
         </View>
         <TouchableOpacity
-          style={[styles.addBtnDesktop, added && styles.addBtnAdded]}
+          style={[styles.addBtnDesktop, added && styles.addBtnAdded, (agotado || atMax) && { backgroundColor: "#ccc" }]}
           onPress={handleAdd}
+          disabled={agotado || atMax}
           activeOpacity={0.8}
         >
           {added ? (
             <>
               <Ionicons name="checkmark" size={14} color="#fff" />
               <Text style={styles.addBtnText}>Agregado</Text>
+            </>
+          ) : agotado || atMax ? (
+            <>
+              <Ionicons name="ban-outline" size={14} color="#fff" />
+              <Text style={styles.addBtnText}>Agotado</Text>
             </>
           ) : (
             <>
@@ -201,15 +272,18 @@ function ProductCardDesktop({ item, onPress }) {
         </TouchableOpacity>
       </View>
     </TouchableOpacity>
+    <LoginPromptSheet visible={showLogin} onClose={() => setShowLogin(false)} />
+    </>
   );
 }
 
 // ─── DESKTOP SIDEBAR ──────────────────────────────────────────────────────────
 function DesktopSidebar({ activeCategory, setActiveCategory, activeSort, setActiveSort, categories }) {
   const allCats = [ALL_FILTER, ...categories];
+  const { t } = useTheme();
   return (
-    <View style={styles.sidebar}>
-      <Text style={styles.sidebarTitle}>CATEGORÍAS</Text>
+    <View style={[styles.sidebar, { backgroundColor: t.card }]}>
+      <Text style={[styles.sidebarTitle, { color: t.textMuted }]}>CATEGORÍAS</Text>
       {allCats.map((cat) => (
         <TouchableOpacity
           key={cat.id}
@@ -220,10 +294,11 @@ function DesktopSidebar({ activeCategory, setActiveCategory, activeSort, setActi
           <Ionicons
             name={cat.icon}
             size={16}
-            color={activeCategory === cat.id ? RED : "#666"}
+            color={activeCategory === cat.id ? RED : t.textMuted}
           />
           <Text style={[
             styles.sidebarItemText,
+            { color: t.textSub },
             activeCategory === cat.id && styles.sidebarItemTextActive
           ]}>
             {cat.label}
@@ -236,7 +311,7 @@ function DesktopSidebar({ activeCategory, setActiveCategory, activeSort, setActi
 
       <View style={styles.sidebarDivider} />
 
-      <Text style={styles.sidebarTitle}>ORDENAR</Text>
+      <Text style={[styles.sidebarTitle, { color: t.textMuted }]}>ORDENAR</Text>
       {SORT_OPTIONS.map((opt, i) => (
         <TouchableOpacity
           key={i}
@@ -247,10 +322,11 @@ function DesktopSidebar({ activeCategory, setActiveCategory, activeSort, setActi
           <Ionicons
             name={activeSort === i ? "radio-button-on" : "radio-button-off"}
             size={16}
-            color={activeSort === i ? RED : "#aaa"}
+            color={activeSort === i ? RED : t.textMuted}
           />
           <Text style={[
             styles.sidebarItemText,
+            { color: t.textSub },
             activeSort === i && styles.sidebarItemTextActive
           ]}>
             {opt}
@@ -321,19 +397,41 @@ export default function StoreScreen({
   onOrdersPress,
   onProfilePress,
   activeTab,
+  initialCategory = "all",
+  filterTrigger = 0,
+  refreshTrigger = 0,
 }) {
   const [search, setSearch] = useState("");
-  const [activeCategory, setActiveCategory] = useState("all");
+  const [activeCategory, setActiveCategory] = useState(initialCategory);
   const [activeSort, setActiveSort] = useState(0);
   const [showSort, setShowSort] = useState(false);
   const [pendingCategory, setPendingCategory] = useState("all");
   const [pendingSort, setPendingSort] = useState(0);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const { count } = useCart();
+  const { t } = useTheme();
   const { width } = useWindowDimensions();
-  const { top: safeTop } = useSafeAreaInsets();
+  const { top: safeTop, bottom: safeBottom } = useSafeAreaInsets();
   const { products, apiLoading, apiError, refetch } = useProducts();
   const categories = useCategories();
+
+  useEffect(() => { setActiveCategory(initialCategory); }, [initialCategory]);
+
+  useEffect(() => {
+    if (refreshTrigger > 0) {
+      refetch();
+    }
+  }, [refreshTrigger, refetch]);
+
+  const prevFilterTrigger = useRef(filterTrigger);
+  useEffect(() => {
+    if (filterTrigger > prevFilterTrigger.current) {
+      setPendingCategory(activeCategory);
+      setPendingSort(activeSort);
+      setShowSort(true);
+    }
+    prevFilterTrigger.current = filterTrigger;
+  }, [filterTrigger]);
 
   const isDesktop = width >= 1024;
   const mobileTopPad = Math.max(safeTop, 20) + MOBILE_HEADER_FIXED + 8;
@@ -358,7 +456,7 @@ export default function StoreScreen({
   // ─── DESKTOP LAYOUT ────────────────────────────────────────────────────────
   if (isDesktop) {
     return (
-      <View style={styles.desktopWrapper}>
+      <View style={[styles.desktopWrapper, { backgroundColor: t.bg }]}>
         {/* DesktopNav is rendered globally in App.js */}
 
         <View style={styles.desktopBody}>
@@ -456,18 +554,19 @@ export default function StoreScreen({
 
   // ─── MOBILE LAYOUT ─────────────────────────────────────────────────────────
   return (
-    <View style={[styles.mobileWrapper, { paddingTop: mobileTopPad }]}>
+    <View style={[styles.mobileWrapper, { paddingTop: mobileTopPad, backgroundColor: t.bg }]}>
       {/* Header */}
-      <View style={styles.mobileHeader}>
-        <Text style={styles.mobileHeaderTitle}>TIENDA</Text>
-        <View style={styles.headerActions}>
+      <View style={[styles.mobileHeader, { backgroundColor: t.header, borderBottomColor: t.border }]}>
+        <Text style={[styles.mobileHeaderTitle, { color: t.text }]}>TIENDA</Text>
+        {(activeCategory !== "all" || activeSort !== 0) && (
           <TouchableOpacity
-            style={styles.headerIconBtn}
+            style={styles.activeFilerPill}
             onPress={() => { setPendingCategory(activeCategory); setPendingSort(activeSort); setShowSort(true); }}
           >
-            <Ionicons name="funnel-outline" size={20} color={(activeCategory !== "all" || activeSort !== 0) ? RED : "#333"} />
+            <Ionicons name="funnel" size={12} color="#fff" />
+            <Text style={styles.activeFilterPillText}>Filtro activo</Text>
           </TouchableOpacity>
-        </View>
+        )}
       </View>
 
       {/* Bottom sheet filtro estilo Rappi */}
@@ -477,8 +576,9 @@ export default function StoreScreen({
         animationType="slide"
         onRequestClose={() => setShowSort(false)}
       >
-        <Pressable style={styles.sheetOverlay} onPress={() => setShowSort(false)} />
-        <View style={styles.sheetContainer}>
+        <View style={{ flex: 1, justifyContent: "flex-end" }}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setShowSort(false)} />
+          <View style={styles.sheetContainer}>
           {/* Handle */}
           <View style={styles.sheetHandle} />
 
@@ -547,12 +647,13 @@ export default function StoreScreen({
             </TouchableOpacity>
           </View>
         </View>
+        </View>
       </Modal>
 
       {/* Results count */}
-      <View style={styles.resultsRow}>
+      <View style={[styles.resultsRow, { backgroundColor: t.header, borderBottomColor: t.border }]}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-          <Text style={styles.resultsText}>
+          <Text style={[styles.resultsText, { color: t.textSub }]}>
             {sorted.length} {sorted.length === 1 ? "producto" : "productos"}
           </Text>
           {apiLoading && <ActivityIndicator size="small" color={RED} />}
@@ -563,17 +664,17 @@ export default function StoreScreen({
           )}
         </View>
         <TouchableOpacity onPress={() => { setPendingCategory(activeCategory); setPendingSort(activeSort); setShowSort(true); }} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-          <Text style={[styles.sortLabel, apiError && { color: RED }]}>
+          <Text style={[styles.sortLabel, { color: t.textMuted }, apiError && { color: RED }]}>
             {apiError ? "Sin conexión" : (activeCategory !== "all" ? [ALL_FILTER, ...categories].find(c => c.id === activeCategory)?.label : SORT_OPTIONS[activeSort])}
           </Text>
-          <Ionicons name="chevron-down" size={12} color="#999" />
+          <Ionicons name="chevron-down" size={12} color={t.textMuted} />
         </TouchableOpacity>
       </View>
 
       {/* Products Grid */}
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.mobileGrid, { paddingBottom: 120 }]}
+        contentContainerStyle={[styles.mobileGrid, { paddingBottom: safeBottom + 84 }]}
       >
         {apiLoading ? (
           <View style={styles.noResults}>
@@ -590,8 +691,20 @@ export default function StoreScreen({
           </View>
         ) : sorted.length === 0 ? (
           <View style={styles.noResults}>
-            <Ionicons name="search-outline" size={48} color="#ddd" />
-            <Text style={styles.noResultsText}>Sin resultados para "{search}"</Text>
+            <Ionicons name={activeCategory !== "all" ? "filter-outline" : "search-outline"} size={48} color="#ddd" />
+            <Text style={styles.noResultsText}>
+              {activeCategory !== "all"
+                ? `Sin productos en "${[ALL_FILTER, ...categories].find(c => c.id === activeCategory)?.label ?? activeCategory}"`
+                : `Sin resultados para "${search}"`}
+            </Text>
+            {activeCategory !== "all" && (
+              <TouchableOpacity
+                onPress={() => setActiveCategory("all")}
+                style={{ marginTop: 12, paddingHorizontal: 20, paddingVertical: 9, backgroundColor: RED, borderRadius: 20 }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "800", fontSize: 13 }}>Ver todos</Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
           <View style={styles.mobileGridWrap}>
@@ -857,6 +970,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   mobileHeaderTitle: { fontSize: 18, fontWeight: "900", color: "#111" },
+  activeFilerPill: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    backgroundColor: RED, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20,
+  },
+  activeFilterPillText: { color: "#fff", fontSize: 11, fontWeight: "800" },
   headerActions: { flexDirection: "row", gap: 8 },
   headerIconBtn: {
     width: 36,
@@ -906,7 +1024,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    maxHeight: "80%",
+    height: "75%",
     paddingBottom: Platform.OS === "ios" ? 34 : 20,
   },
   sheetHandle: {

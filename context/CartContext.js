@@ -32,11 +32,12 @@ export function CartProvider({ children }) {
   }, [items, cartUserId, userId]);
 
   const addToCart = (product, qty = 1) => {
+    if (!user) return { ok: false, authRequired: true };
     const stock = product.stock ?? null;
     const existing = items.find((i) => i.id === product.id);
     const currentQty = existing?.qty ?? 0;
 
-    if (stock !== null) {
+    if (stock !== null && stock !== -1) {
       if (stock === 0) return { ok: false, message: "Producto agotado" };
       if (currentQty >= stock)
         return { ok: false, message: `Solo hay ${stock} en stock y ya los tienes en tu carrito` };
@@ -58,7 +59,7 @@ export function CartProvider({ children }) {
     if (qty <= 0) { removeFromCart(productId); return; }
     const item = items.find((i) => i.id === productId);
     const stock = item?.stock ?? null;
-    const capped = stock !== null ? Math.min(qty, stock) : qty;
+    const capped = (stock !== null && stock !== -1) ? Math.min(qty, stock) : qty;
     setItems((prev) => prev.map((i) => i.id === productId ? { ...i, qty: capped } : i));
   };
 
@@ -66,8 +67,9 @@ export function CartProvider({ children }) {
 
   const count = items.reduce((sum, i) => sum + i.qty, 0);
   const subtotal = items.reduce((sum, i) => {
-    const match = i.price?.match?.(/[\d.]+/);
-    const price = match ? parseFloat(match[0]) : 0;
+    const price = typeof i.price === "number"
+      ? i.price
+      : parseFloat(String(i.price ?? "0").replace(/[^0-9.]/g, "")) || 0;
     return sum + price * i.qty;
   }, 0);
 

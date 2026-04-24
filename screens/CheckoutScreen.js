@@ -15,12 +15,46 @@ import {
 } from "react-native";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
+import { useTheme } from "../context/ThemeContext";
 import { useLocation } from "../context/LocationContext";
-import LocationPickerModal from "../components/LocationPickerModal";
-import { createOrder } from "../services/api";
+import LocationPickerModal, { COVERAGE_KM, EXTENDED_KM, TPN_STORES } from "../components/LocationPickerModal";
+import { createOrder, getStores, GOOGLE_MAPS_API_KEY } from "../services/api";
 
-const RED = "#e6192e";
-const GREEN = "#22c55e";
+const RED    = "#e6192e";
+const GREEN  = "#22c55e";
+const ORANGE = "#f59e0b";
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+async function fetchDrivingETA(fromLat, fromLng, toLat, toLng) {
+  try {
+    if (!GOOGLE_MAPS_API_KEY || GOOGLE_MAPS_API_KEY === "TU_GOOGLE_MAPS_API_KEY") return null;
+    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${fromLat},${fromLng}&destination=${toLat},${toLng}&key=${GOOGLE_MAPS_API_KEY}&departure_time=now`;
+    const res  = await fetch(url);
+    const data = await res.json();
+    const leg = data?.routes?.[0]?.legs?.[0];
+    const secs = leg?.duration_in_traffic?.value || leg?.duration?.value;
+    if (!secs) return null;
+    const min = Math.ceil((secs / 60 + 10) / 5) * 5;
+    return min;
+  } catch {
+    return null;
+  }
+}
+
+function formatMinutes(min) {
+  if (!min) return null;
+  return min >= 60
+    ? `~${Math.floor(min / 60)}h ${min % 60 > 0 ? `${min % 60} min` : ""} en auto`.trim()
+    : `~${min} min en auto`;
+}
 
 // ─── PASOS DEL CHECKOUT ───────────────────────────────────────────────────────
 const STEPS = ["Dirección", "Pago", "Confirmar"];
@@ -61,8 +95,9 @@ function StepBar({ step, width, isDesktop }) {
 // ─── PANTALLA PRINCIPAL ───────────────────────────────────────────────────────
 export default function CheckoutScreen({ onBack, onSuccess }) {
   const { user } = useAuth();
+  const { t } = useTheme();
   const { items, subtotal, clearCart } = useCart();
-  const { address, coords, deliveryAddress } = useLocation();
+  const { address, coords, deliveryAddress, deliveryCoords } = useLocation();
   const { width } = useWindowDimensions();
   const isDesktop = width >= 1024;
   
@@ -79,6 +114,8 @@ export default function CheckoutScreen({ onBack, onSuccess }) {
   const [manualAddr, setManualAddr] = useState("");
   const [destCoords, setDestCoords] = useState(null);
   const [pickerVisible, setPickerVisible] = useState(false);
+  const [etaMinutes, setEtaMinutes] = useState(null);
+  const [etaLoading, setEtaLoading] = useState(false);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -93,6 +130,24 @@ export default function CheckoutScreen({ onBack, onSuccess }) {
       })
       .catch(() => {});
   }, [user?.id]);
+
+  // Calcular ETA real con Mapbox cuando el usuario elige coordenadas
+  useEffect(() => {
+    const dLat = destCoords?.lat || deliveryCoords?.lat || coords?.latitude || null;
+    const dLng = destCoords?.lng || deliveryCoords?.lng || coords?.longitude || null;
+    if (!dLat || !dLng || selectedAddr) { setEtaMinutes(null); return; }
+    let minD = Infinity, nearest = null;
+    TPN_STORES.forEach((s) => {
+      const d = haversineKm(dLat, dLng, s.lat, s.lng);
+      if (d < minD) { minD = d; nearest = s; }
+    });
+    if (!nearest || minD > EXTENDED_KM) { setEtaMinutes(null); return; }
+    setEtaLoading(true);
+    fetchDrivingETA(nearest.lat, nearest.lng, dLat, dLng).then((min) => {
+      setEtaMinutes(min);
+      setEtaLoading(false);
+    });
+  }, [destCoords, deliveryCoords, coords, selectedAddr]);
 
   useEffect(() => {
     // Si la app tiene una ubicación detectada, la ponemos en manualAddr como backup/opción
@@ -120,29 +175,33 @@ export default function CheckoutScreen({ onBack, onSuccess }) {
   }, [user?.id]);
 
   // ── Crear pedido ───────────────────────────────────────────────────────────
+  const [orderError, setOrderError] = useState(null);
+
   const handleConfirm = async () => {
     setLoading(true);
+    setOrderError(null);
     const addr = addresses.find((a) => a.id === selectedAddr);
     const deliveryAddress = addr ? addr.address : manualAddr.trim();
     const card = cards.find((c) => c.id === selectedCard);
 
-    const dLat = addr?.lat || destCoords?.lat || null;
-    const dLng = addr?.lng || destCoords?.lng || null;
+    const dLat = addr?.lat || destCoords?.lat || deliveryCoords?.lat || coords?.latitude || null;
+    const dLng = addr?.lng || destCoords?.lng || deliveryCoords?.lng || coords?.longitude || null;
 
-    // Buscar tienda más cercana si tenemos coordenadas
     let storeId = null;
     if (dLat && dLng) {
       try {
-        const { getStores } = require("../services/api");
         const resStores = await getStores();
         if (resStores?.success && Array.isArray(resStores.data)) {
           let minD = Infinity;
           resStores.data.forEach(s => {
-            const dist = Math.sqrt(Math.pow(s.lat - dLat, 2) + Math.pow(s.lng - dLng, 2));
-            if (dist < minD) {
-              minD = dist;
-              storeId = s.id;
-            }
+            if (!s.lat || !s.lng) return;
+            const R = 6371;
+            const dφ = (s.lat - dLat) * Math.PI / 180;
+            const dλ = (s.lng - dLng) * Math.PI / 180;
+            const a = Math.sin(dφ / 2) ** 2 +
+              Math.cos(dLat * Math.PI / 180) * Math.cos(s.lat * Math.PI / 180) * Math.sin(dλ / 2) ** 2;
+            const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            if (dist < minD) { minD = dist; storeId = s.id; }
           });
         }
       } catch {}
@@ -153,7 +212,9 @@ export default function CheckoutScreen({ onBack, onSuccess }) {
         product_id: item.id,
         product_name: item.name,
         qty: item.qty,
-        price: item.price_numeric || parseFloat(String(item.price).replace(/[^0-9.]/g, "")),
+        price: typeof item.price === "number"
+          ? item.price
+          : parseFloat(String(item.price).replace(/[^0-9.]/g, "")) || 0,
       })),
       subtotal,
       shipping,
@@ -173,31 +234,15 @@ export default function CheckoutScreen({ onBack, onSuccess }) {
 
     try {
       const res = await createOrder(orderData, user?.token);
-      // La API devuelve { success: true, data: { order_id, id } }
       const orderId = res?.data?.order_id || res?.data?.id || res?.order_id || res?.id;
       if (res?.success && orderId) {
         setOrderDone({ id: orderId, total, address: deliveryAddress, payMethod: orderData.payment_method });
         clearCart();
       } else {
-        // Modo offline si la API falla
-        setOrderDone({
-          id: Math.floor(Math.random() * 900000 + 100000),
-          total,
-          address: deliveryAddress,
-          payMethod: orderData.payment_method,
-          offline: true,
-        });
-        clearCart();
+        setOrderError(res?.message || "No se pudo crear el pedido. Intenta de nuevo.");
       }
-    } catch {
-      setOrderDone({
-        id: Math.floor(Math.random() * 900000 + 100000),
-        total,
-        address: deliveryAddress,
-        payMethod: orderData.payment_method,
-        offline: true,
-      });
-      clearCart();
+    } catch (e) {
+      setOrderError("Error de conexión: " + (e?.message || "revisa tu internet e intenta de nuevo."));
     }
     setLoading(false);
   };
@@ -252,8 +297,27 @@ export default function CheckoutScreen({ onBack, onSuccess }) {
     return successContent;
   }
 
+  // ── Cobertura: calcular distancia a la sucursal más cercana ──────────────
+  const getCoverageInfo = () => {
+    const lat = destCoords?.lat || deliveryCoords?.lat || coords?.latitude || null;
+    const lng = destCoords?.lng || deliveryCoords?.lng || coords?.longitude || null;
+    if (!lat || !lng || selectedAddr) return null; // dirección guardada ya fue validada al elegirla
+    let minD = Infinity, nearest = null;
+    TPN_STORES.forEach((s) => {
+      const d = haversineKm(lat, lng, s.lat, s.lng);
+      if (d < minD) { minD = d; nearest = s; }
+    });
+    return nearest ? { dist: minD, store: nearest } : null;
+  };
+
   // ── Paso 0: Dirección ──────────────────────────────────────────────────────
-  const renderStep0 = () => (
+  const renderStep0 = () => {
+    const coverage = getCoverageInfo();
+    const outOfRange = coverage && coverage.dist > EXTENDED_KM;
+    const isExtended = coverage && coverage.dist > COVERAGE_KM && coverage.dist <= EXTENDED_KM;
+    const formatKm = (d) => d < 1 ? `${Math.round(d * 1000)} m` : `${d.toFixed(1)} km`;
+
+    return (
     <View>
       <Text style={s.sectionTitle}>¿A dónde enviamos tu pedido?</Text>
 
@@ -324,16 +388,60 @@ export default function CheckoutScreen({ onBack, onSuccess }) {
         </View>
       )}
 
+      {/* Banner de cobertura */}
+      {outOfRange && (
+        <View style={s.coverageBanner}>
+          <Ionicons name="alert-circle" size={20} color={RED} />
+          <View style={{ flex: 1 }}>
+            <Text style={s.coverageBannerTitle}>Fuera de cobertura</Text>
+            <Text style={s.coverageBannerText}>
+              Estás a {formatKm(coverage.dist)} de {coverage.store.name} en línea recta —
+              demasiado lejos para entrega en auto por el momento.
+              ¡Esperamos tener una sucursal cerca de ti muy pronto! 🏪
+            </Text>
+          </View>
+        </View>
+      )}
+      {isExtended && (
+        <View style={[s.coverageBanner, s.coverageBannerOrange]}>
+          <Ionicons name="car-outline" size={20} color={ORANGE} />
+          <View style={{ flex: 1 }}>
+            <Text style={[s.coverageBannerTitle, { color: ORANGE }]}>
+              Zona extendida
+              {etaLoading ? " · calculando..." : etaMinutes ? ` · ${formatMinutes(etaMinutes)}` : ""}
+            </Text>
+            <Text style={s.coverageBannerText}>
+              Tu domicilio está a {formatKm(coverage.dist)} de {coverage.store.name}.
+              Podemos llegar en auto pero el tiempo de entrega es mayor al habitual.
+            </Text>
+          </View>
+        </View>
+      )}
+      {!outOfRange && !isExtended && coverage && (
+        <View style={[s.coverageBanner, s.coverageBannerGreen]}>
+          <Ionicons name="car-outline" size={20} color="#16a34a" />
+          <View style={{ flex: 1 }}>
+            <Text style={[s.coverageBannerTitle, { color: "#16a34a" }]}>
+              {etaLoading ? "Calculando tiempo en auto..." : etaMinutes ? formatMinutes(etaMinutes) : "Con cobertura"}
+            </Text>
+            <Text style={s.coverageBannerText}>
+              Tiempo estimado de entrega en auto con tráfico desde {coverage.store.name}.
+            </Text>
+          </View>
+        </View>
+      )}
+
       <TouchableOpacity
-        style={[s.nextBtn, (!selectedAddr && !manualAddr.trim()) && s.nextBtnDisabled]}
+        style={[s.nextBtn, ((!selectedAddr && !manualAddr.trim()) || outOfRange) && s.nextBtnDisabled]}
         onPress={() => setStep(1)}
-        disabled={!selectedAddr && !manualAddr.trim()}
+        disabled={(!selectedAddr && !manualAddr.trim()) || outOfRange}
       >
-        <Text style={s.nextBtnText}>Continuar</Text>
-        <Ionicons name="arrow-forward" size={18} color="#fff" />
+        <Text style={s.nextBtnText}>{outOfRange ? "Sin cobertura en esta zona" : "Continuar"}</Text>
+        {!outOfRange && <Ionicons name="arrow-forward" size={18} color="#fff" />}
       </TouchableOpacity>
     </View>
   );
+  };
 
   // ── Paso 1: Método de pago ─────────────────────────────────────────────────
   const PAY_OPTIONS = [
@@ -467,6 +575,13 @@ export default function CheckoutScreen({ onBack, onSuccess }) {
           </View>
         )}
 
+        {orderError && (
+          <View style={s.orderErrorBanner}>
+            <Ionicons name="alert-circle" size={18} color="#991b1b" />
+            <Text style={s.orderErrorText}>{orderError}</Text>
+          </View>
+        )}
+
         <View style={{ flexDirection: "row", gap: 10, marginTop: 8 }}>
           <TouchableOpacity style={s.backStepBtn} onPress={() => setStep(1)}>
             <Ionicons name="arrow-back" size={16} color="#555" />
@@ -496,13 +611,13 @@ export default function CheckoutScreen({ onBack, onSuccess }) {
 
   // ── Renderizado Principal ──────────────────────────────────────────────────
   const checkoutContent = (
-    <View style={isDesktop ? s.desktopPanel : s.panel}>
+    <View style={[isDesktop ? s.desktopPanel : s.panel, { backgroundColor: t.bg }]}>
       {/* Header */}
-      <View style={s.header}>
-        <TouchableOpacity onPress={onBack} style={s.backBtn}>
-          <Ionicons name="close" size={24} color="#333" />
+      <View style={[s.header, { backgroundColor: t.header, borderBottomColor: t.border }]}>
+        <TouchableOpacity onPress={onBack} style={[s.backBtn, { backgroundColor: t.iconBg }]}>
+          <Ionicons name="close" size={24} color={t.text} />
         </TouchableOpacity>
-        <Text style={s.headerTitle}>FINALIZAR PEDIDO</Text>
+        <Text style={[s.headerTitle, { color: t.text }]}>FINALIZAR PEDIDO</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -517,20 +632,45 @@ export default function CheckoutScreen({ onBack, onSuccess }) {
         {step === 2 && renderStep2()}
       </ScrollView>
 
-      <LocationPickerModal
-        visible={pickerVisible}
-        onClose={() => setPickerVisible(false)}
-        onConfirm={(addr, coords) => {
-          setManualAddr(addr);
-          setDestCoords(coords);
-          setSelectedAddr(null);
-        }}
-        currentCoords={coords}
-      />
+      {/* LocationPickerModal solo en móvil — en desktop se maneja inline */}
+      {!isDesktop && (
+        <LocationPickerModal
+          visible={pickerVisible}
+          onClose={() => setPickerVisible(false)}
+          onConfirm={(addr, coords) => {
+            setManualAddr(addr);
+            setDestCoords(coords);
+            setSelectedAddr(null);
+          }}
+          currentCoords={coords}
+        />
+      )}
     </View>
   );
 
   if (isDesktop) {
+    // En desktop: si el picker está activo, sustituye el checkout por el mapa dentro del mismo panel
+    if (pickerVisible) {
+      return (
+        <View style={[s.desktopWrapper, Platform.OS === "web" && { position: "fixed" }]}>
+          <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => setPickerVisible(false)} />
+          <View style={s.desktopPanel}>
+            <LocationPickerModal
+              visible={true}
+              inline={true}
+              onClose={() => setPickerVisible(false)}
+              onConfirm={(addr, coords) => {
+                setManualAddr(addr);
+                setDestCoords(coords);
+                setSelectedAddr(null);
+              }}
+              currentCoords={coords}
+            />
+          </View>
+        </View>
+      );
+    }
+
     return (
       <View style={[s.desktopWrapper, Platform.OS === "web" && { position: "fixed" }]}>
         <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={onBack} />
@@ -539,7 +679,7 @@ export default function CheckoutScreen({ onBack, onSuccess }) {
     );
   }
 
-  return <View style={s.wrapper}>{checkoutContent}</View>;
+  return <View style={[s.wrapper, { backgroundColor: t.bg }]}>{checkoutContent}</View>;
 }
 
 // ─── HELPER ───────────────────────────────────────────────────────────────────
@@ -659,6 +799,16 @@ const s = StyleSheet.create({
   transferLine: { fontSize: 13, color: "#555", marginBottom: 4, fontFamily: Platform.OS === "ios" ? "Courier" : "monospace" },
   transferHint: { fontSize: 11, color: "#aaa", marginTop: 8 },
 
+  coverageBanner: {
+    flexDirection: "row", alignItems: "flex-start", gap: 10,
+    backgroundColor: "#fff1f2", borderRadius: 14, padding: 14,
+    borderWidth: 1, borderColor: "#fecdd3", marginBottom: 12,
+  },
+  coverageBannerOrange: { backgroundColor: "#fffbeb", borderColor: "#fde68a" },
+  coverageBannerGreen:  { backgroundColor: "#f0fdf4", borderColor: "#bbf7d0" },
+  coverageBannerTitle: { fontSize: 13, fontWeight: "800", color: RED, marginBottom: 3 },
+  coverageBannerText: { fontSize: 12, color: "#555", lineHeight: 17 },
+
   nextBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: RED, borderRadius: 14, paddingVertical: 15, marginTop: 8 },
   nextBtnDisabled: { backgroundColor: "#ccc" },
   nextBtnText: { color: "#fff", fontWeight: "900", fontSize: 15 },
@@ -689,4 +839,11 @@ const s = StyleSheet.create({
   doneBtnText: { color: "#fff", fontWeight: "900", fontSize: 15 },
   homeBtn: { paddingVertical: 12 },
   homeBtnText: { fontSize: 14, color: "#888", fontWeight: "600" },
+
+  orderErrorBanner: {
+    flexDirection: "row", alignItems: "flex-start", gap: 10,
+    backgroundColor: "#fef2f2", borderRadius: 12, padding: 14,
+    borderWidth: 1, borderColor: "#fecaca", marginBottom: 10,
+  },
+  orderErrorText: { flex: 1, fontSize: 13, color: "#991b1b", lineHeight: 19, fontWeight: "600" },
 });

@@ -8,6 +8,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -17,9 +18,12 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import ProductDetailModal from "../components/ProductDetailModal";
 import { useAuth } from "../context/AuthContext";
+import { useTheme } from "../context/ThemeContext";
 import { useWishlist } from "../context/WishlistContext";
 import { MOBILE_HEADER_FIXED } from "./HomeScreen";
 import { forgotPassword } from "../services/api";
+import { useLocation } from "../context/LocationContext";
+import { registerForPushNotifications } from "../services/notifications";
 
 const RED = "#e6192e";
 const YELLOW = "#fede33";
@@ -176,7 +180,6 @@ function AuthView() {
 
 // ─── SUB-HEADER (botón atrás + título) ────────────────────────────────────────
 function SubHeader({ title, onBack, isDesktop }) {
-  const { top: safeTop } = useSafeAreaInsets();
   if (isDesktop) {
     return (
       <View style={sub.desktopHeader}>
@@ -184,11 +187,10 @@ function SubHeader({ title, onBack, isDesktop }) {
       </View>
     );
   }
-  const topPad = Math.max(safeTop, 20) + MOBILE_HEADER_FIXED + 8;
   return (
-    <View style={[sub.header, { paddingTop: topPad }]}>
+    <View style={sub.header}>
       <TouchableOpacity style={sub.backBtn} onPress={onBack}>
-        <Ionicons name="arrow-back" size={20} color="#333" />
+        <Ionicons name="arrow-back" size={22} color="#333" />
       </TouchableOpacity>
       <Text style={sub.title}>{title}</Text>
     </View>
@@ -215,7 +217,7 @@ export function MisDatos({ user, onBack, isDesktop }) {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: isDesktop ? "#fff" : "#f5f5f5" }}>
+    <View style={isDesktop ? { flex: 1, backgroundColor: "#fff" } : styles.wrapper}>
       <SubHeader title="MIS DATOS" onBack={onBack} isDesktop={isDesktop} />
       <ScrollView contentContainerStyle={{ padding: 24 }}>
         {/* Avatar */}
@@ -278,6 +280,7 @@ export function MisDatos({ user, onBack, isDesktop }) {
 
 // ─── MIS DIRECCIONES ──────────────────────────────────────────────────────────
 export function MisDirecciones({ userId, onBack, isDesktop }) {
+  const { address: gpsAddress, deliveryAddress, setDeliveryAddress } = useLocation();
   const [addresses, setAddresses] = useState([]);
   const [newAddr, setNewAddr] = useState("");
   const [newLabel, setNewLabel] = useState("");
@@ -305,9 +308,25 @@ export function MisDirecciones({ userId, onBack, isDesktop }) {
   const setDefault = (id) => save(addresses.map((a) => ({ ...a, isDefault: a.id === id })));
 
   return (
-    <View style={{ flex: 1, backgroundColor: isDesktop ? "#fff" : "#f5f5f5" }}>
+    <View style={isDesktop ? { flex: 1, backgroundColor: "#fff" } : styles.wrapper}>
       <SubHeader title="MIS DIRECCIONES" onBack={onBack} isDesktop={isDesktop} />
       <ScrollView contentContainerStyle={{ padding: 24 }}>
+
+        {/* Dirección activa que usa el mapa */}
+        <View style={sub.activeAddrCard}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <Ionicons name="navigate-circle" size={18} color={RED} />
+            <Text style={sub.activeAddrTitle}>DIRECCIÓN ACTIVA DEL MAPA</Text>
+          </View>
+          <Text style={sub.activeAddrText} numberOfLines={2}>
+            {deliveryAddress || gpsAddress || "No detectada"}
+          </Text>
+          <Text style={sub.activeAddrHint}>
+            Esta es la dirección que usa la app para tus pedidos y el mapa de rastreo.
+            Selecciona una guardada para cambiarla.
+          </Text>
+        </View>
+
         {addresses.length === 0 && !adding && (
           <View style={sub.emptyBox}>
             <Ionicons name="location-outline" size={44} color="#ddd" />
@@ -331,7 +350,7 @@ export function MisDirecciones({ userId, onBack, isDesktop }) {
             </View>
             <View style={{ gap: 6 }}>
               {!addr.isDefault && (
-                <TouchableOpacity onPress={() => setDefault(addr.id)}>
+                <TouchableOpacity onPress={() => { setDefault(addr.id); setDeliveryAddress(addr.address); }}>
                   <Ionicons name="star-outline" size={18} color="#aaa" />
                 </TouchableOpacity>
               )}
@@ -422,7 +441,7 @@ export function MetodosPago({ userId, onBack, isDesktop }) {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: isDesktop ? "#fff" : "#f5f5f5" }}>
+    <View style={isDesktop ? { flex: 1, backgroundColor: "#fff" } : styles.wrapper}>
       <SubHeader title="MÉTODOS DE PAGO" onBack={onBack} isDesktop={isDesktop} />
       <ScrollView contentContainerStyle={{ padding: 24 }}>
         {cards.length === 0 && !adding && (
@@ -492,7 +511,7 @@ export function ListaDeseos({ onBack, isDesktop }) {
   const [selectedProduct, setSelectedProduct] = useState(null);
 
   return (
-    <View style={{ flex: 1, backgroundColor: isDesktop ? "#fff" : "#f5f5f5" }}>
+    <View style={isDesktop ? { flex: 1, backgroundColor: "#fff" } : styles.wrapper}>
       <SubHeader title="LISTA DE DESEOS" onBack={onBack} isDesktop={isDesktop} />
       {wishlist.length === 0 ? (
         <View style={sub.emptyBox}>
@@ -530,16 +549,40 @@ export function ListaDeseos({ onBack, isDesktop }) {
 }
 
 // ─── PANTALLA PRINCIPAL ───────────────────────────────────────────────────────
-export default function ProfileScreen({ onAuthSuccess, onOrdersPress }) {
+export default function ProfileScreen({ onAuthSuccess, onOrdersPress, initialSubScreen = null, onReturn = null }) {
   const { user, signOut } = useAuth();
   const { wishlist } = useWishlist();
-  const { top: safeTop } = useSafeAreaInsets();
+  const { isDark, t, toggleDark, notificationsEnabled, toggleNotifications } = useTheme();
   const { width } = useWindowDimensions();
+  const { bottom: safeBottom } = useSafeAreaInsets();
   const isDesktop = width >= 1024;
-  const mobileTopPad = Math.max(safeTop, 20) + MOBILE_HEADER_FIXED + 8;
   const isLoggedIn = !!user;
   const wasLoggedIn = useRef(isLoggedIn);
-  const [currentScreen, setCurrentScreen] = useState(null);
+  const [currentScreen, setCurrentScreen] = useState(initialSubScreen);
+  const [ordersCount, setOrdersCount] = useState(0);
+  const [savedAmount, setSavedAmount] = useState(0);
+
+  // Sincronizar sub-pantalla externa
+  useEffect(() => {
+    if (initialSubScreen) setCurrentScreen(initialSubScreen);
+  }, [initialSubScreen]);
+
+  // Cargar estadísticas del usuario (Pedidos y Ahorro estimado)
+  useEffect(() => {
+    if (user?.token) {
+      const { getUserOrders } = require("../services/api");
+      getUserOrders(user.token).then((res) => {
+        if (res?.success && Array.isArray(res.data)) {
+          setOrdersCount(res.data.length);
+          // Simulación de ahorro: 5% del total de pedidos entregados
+          const totalSpent = res.data
+            .filter(o => o.status === "delivered")
+            .reduce((sum, o) => sum + parseFloat(o.total || 0), 0);
+          setSavedAmount(totalSpent * 0.05); 
+        }
+      }).catch(() => {});
+    }
+  }, [user?.token, isLoggedIn]);
 
   useEffect(() => {
     if (isLoggedIn && !wasLoggedIn.current) {
@@ -548,13 +591,22 @@ export default function ProfileScreen({ onAuthSuccess, onOrdersPress }) {
     wasLoggedIn.current = isLoggedIn;
   }, [isLoggedIn]);
 
+  const handleBack = () => {
+    if (initialSubScreen && onReturn) {
+      onReturn();
+    } else {
+      setCurrentScreen(null);
+    }
+  };
+
   // Mobile: sub-screens as full-page replacements
   if (!isDesktop) {
-    if (currentScreen === "datos") return <MisDatos user={user} onBack={() => setCurrentScreen(null)} />;
-    if (currentScreen === "direcciones") return <MisDirecciones userId={user?.id} onBack={() => setCurrentScreen(null)} />;
-    if (currentScreen === "pagos") return <MetodosPago userId={user?.id} onBack={() => setCurrentScreen(null)} />;
-    if (currentScreen === "deseos") return <ListaDeseos onBack={() => setCurrentScreen(null)} />;
+    if (currentScreen === "datos") return <MisDatos user={user} onBack={handleBack} />;
+    if (currentScreen === "direcciones") return <MisDirecciones userId={user?.id} onBack={handleBack} />;
+    if (currentScreen === "pagos") return <MetodosPago userId={user?.id} onBack={handleBack} />;
+    if (currentScreen === "deseos") return <ListaDeseos onBack={handleBack} />;
   }
+
 
   const MENU_SECTIONS = [
     {
@@ -575,8 +627,8 @@ export default function ProfileScreen({ onAuthSuccess, onOrdersPress }) {
     {
       title: "PREFERENCIAS",
       items: [
-        { key: null, icon: "notifications-outline", label: "Notificaciones", toggle: true },
-        { key: null, icon: "moon-outline",          label: "Modo oscuro",     toggle: true },
+        { key: null, icon: "notifications-outline", label: "Notificaciones", toggle: true, toggleValue: notificationsEnabled, onToggle: () => toggleNotifications(registerForPushNotifications) },
+        { key: null, icon: "moon-outline",          label: "Modo oscuro",     toggle: true, toggleValue: isDark,                 onToggle: toggleDark },
       ],
     },
     {
@@ -606,10 +658,10 @@ export default function ProfileScreen({ onAuthSuccess, onOrdersPress }) {
     };
 
     return (
-      <View style={{ flex: 1, backgroundColor: "#f5f5f5" }}>
+      <View style={{ flex: 1, backgroundColor: t.bg }}>
         <View style={deskProf.body}>
           {/* ── Sidebar izquierdo ─────────────────────────────────────── */}
-          <View style={deskProf.sidebar}>
+          <View style={[deskProf.sidebar, { backgroundColor: t.card }]}>
             <ScrollView showsVerticalScrollIndicator={false}>
               {isLoggedIn ? (
                 <>
@@ -634,16 +686,15 @@ export default function ProfileScreen({ onAuthSuccess, onOrdersPress }) {
                   {/* Stats */}
                   <View style={deskProf.statsRow}>
                     <TouchableOpacity style={deskProf.statItem} onPress={() => onOrdersPress?.()}>
-                      <Text style={deskProf.statNum}>0</Text>
-                      <Text style={deskProf.statLabel}>Pedidos</Text>
+                      <Text style={[deskProf.statNum, { color: t.text }]}>{ordersCount}</Text>
+                      <Text style={[deskProf.statLabel, { color: t.textMuted }]}>Pedidos</Text>
                     </TouchableOpacity>
-                    <View style={styles.statDivider} />
+                    <View style={[styles.statDivider, { backgroundColor: t.divider }]} />
                     <TouchableOpacity style={deskProf.statItem} onPress={() => setCurrentScreen("deseos")}>
-                      <Text style={deskProf.statNum}>{wishlist.length}</Text>
-                      <Text style={deskProf.statLabel}>Favoritos</Text>
+                      <Text style={[deskProf.statNum, { color: t.text }]}>{wishlist.length}</Text>
+                      <Text style={[deskProf.statLabel, { color: t.textMuted }]}>Favoritos</Text>
                     </TouchableOpacity>
                   </View>
-
                   {/* Menú */}
                   <View style={{ paddingHorizontal: 12, paddingTop: 8 }}>
                     {MENU_SECTIONS.map((section, si) => (
@@ -655,9 +706,9 @@ export default function ProfileScreen({ onAuthSuccess, onOrdersPress }) {
                             <TouchableOpacity
                               key={ii}
                               style={[deskProf.menuItem, isActive && deskProf.menuItemActive]}
-                              onPress={item.onPress}
+                              onPress={item.toggle ? item.onToggle : item.onPress}
                               disabled={!item.onPress && !item.toggle}
-                              activeOpacity={0.7}
+                              activeOpacity={item.toggle ? 1 : 0.7}
                             >
                               <View style={[deskProf.menuIcon, isActive && deskProf.menuIconActive]}>
                                 <Ionicons name={item.icon} size={18} color={isActive ? RED : "#888"} />
@@ -666,11 +717,16 @@ export default function ProfileScreen({ onAuthSuccess, onOrdersPress }) {
                               {item.badge && (
                                 <View style={styles.menuBadge}><Text style={styles.menuBadgeText}>{item.badge}</Text></View>
                               )}
-                              {!item.toggle && !item.badge && (
+                              {item.toggle ? (
+                                <Switch
+                                  value={item.toggleValue}
+                                  onValueChange={item.onToggle}
+                                  trackColor={{ false: "#e5e7eb", true: "#fca5a5" }}
+                                  thumbColor={item.toggleValue ? RED : "#f3f4f6"}
+                                  ios_backgroundColor="#e5e7eb"
+                                />
+                              ) : !item.badge && (
                                 <Ionicons name="chevron-forward" size={14} color={isActive ? RED : "#ddd"} />
-                              )}
-                              {item.toggle && (
-                                <View style={styles.toggleOff}><View style={styles.toggleThumb} /></View>
                               )}
                             </TouchableOpacity>
                           );
@@ -694,7 +750,7 @@ export default function ProfileScreen({ onAuthSuccess, onOrdersPress }) {
           </View>
 
           {/* ── Panel derecho ─────────────────────────────────────────── */}
-          <View style={deskProf.main}>
+          <View style={[deskProf.main, { backgroundColor: t.card }]}>
             {isLoggedIn ? renderDesktopContent() : (
               <View style={deskProf.placeholder}>
                 <Ionicons name="lock-closed-outline" size={48} color="#e0e0e0" />
@@ -709,16 +765,16 @@ export default function ProfileScreen({ onAuthSuccess, onOrdersPress }) {
 
   // ─── MOBILE LAYOUT ───────────────────────────────────────────────────────────
   return (
-    <View style={[styles.wrapper, { paddingTop: mobileTopPad }]}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>MI PERFIL</Text>
+    <View style={[styles.wrapper, { backgroundColor: t.bg }]}>
+      <View style={[styles.header, { backgroundColor: t.header, borderBottomColor: t.border }]}>
+        <Text style={[styles.headerTitle, { color: t.text }]}>MI PERFIL</Text>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.scrollContent, { paddingBottom: safeBottom + 84 }]}>
         {isLoggedIn ? (
           <>
             {/* Tarjeta de usuario */}
-            <View style={styles.profileCard}>
+            <View style={[styles.profileCard, { backgroundColor: t.card }]}>
               <View style={styles.avatarWrap}>
                 {user.photo || user.photo_url ? (
                   <Image source={{ uri: user.photo || user.photo_url }} style={styles.avatarImg} />
@@ -734,8 +790,8 @@ export default function ProfileScreen({ onAuthSuccess, onOrdersPress }) {
                 )}
               </View>
               <View style={styles.profileInfo}>
-                <Text style={styles.profileName}>{(user.name || "USUARIO").toUpperCase()}</Text>
-                <Text style={styles.profileEmail}>{user.email}</Text>
+                <Text style={[styles.profileName, { color: t.text }]}>{(user.name || "USUARIO").toUpperCase()}</Text>
+                <Text style={[styles.profileEmail, { color: t.textMuted }]}>{user.email}</Text>
               </View>
               <TouchableOpacity style={styles.editBtn} onPress={() => setCurrentScreen("datos")}>
                 <Ionicons name="create-outline" size={18} color={RED} />
@@ -743,41 +799,41 @@ export default function ProfileScreen({ onAuthSuccess, onOrdersPress }) {
             </View>
 
             {/* Estadísticas */}
-            <View style={styles.statsRow}>
+            <View style={[styles.statsRow, { backgroundColor: t.card }]}>
               <TouchableOpacity style={styles.statItem} onPress={() => onOrdersPress?.()}>
-                <Text style={styles.statNum}>0</Text>
-                <Text style={styles.statLabel}>Pedidos</Text>
+                <Text style={[styles.statNum, { color: t.text }]}>{ordersCount}</Text>
+                <Text style={[styles.statLabel, { color: t.textMuted }]}>Pedidos</Text>
               </TouchableOpacity>
-              <View style={styles.statDivider} />
+              <View style={[styles.statDivider, { backgroundColor: t.divider }]} />
               <TouchableOpacity style={styles.statItem} onPress={() => setCurrentScreen("deseos")}>
-                <Text style={styles.statNum}>{wishlist.length}</Text>
-                <Text style={styles.statLabel}>Favoritos</Text>
+                <Text style={[styles.statNum, { color: t.text }]}>{wishlist.length}</Text>
+                <Text style={[styles.statLabel, { color: t.textMuted }]}>Favoritos</Text>
               </TouchableOpacity>
-              <View style={styles.statDivider} />
+              <View style={[styles.statDivider, { backgroundColor: t.divider }]} />
               <View style={styles.statItem}>
-                <Text style={styles.statNum}>$0</Text>
-                <Text style={styles.statLabel}>Ahorrado</Text>
+                <Text style={[styles.statNum, { color: t.text }]}>${Math.round(savedAmount)}</Text>
+                <Text style={[styles.statLabel, { color: t.textMuted }]}>Ahorrado</Text>
               </View>
             </View>
 
             {/* Menú de secciones */}
             {MENU_SECTIONS.map((section, si) => (
               <View key={si} style={styles.menuSection}>
-                <Text style={styles.menuSectionTitle}>{section.title}</Text>
-                <View style={styles.menuCard}>
+                <Text style={[styles.menuSectionTitle, { color: t.textMuted }]}>{section.title}</Text>
+                <View style={[styles.menuCard, { backgroundColor: t.card }]}>
                   {section.items.map((item, ii) => (
                     <View key={ii}>
                       <TouchableOpacity
-                        style={styles.menuItem}
-                        activeOpacity={0.7}
-                        onPress={item.onPress}
+                        style={[styles.menuItem, { borderBottomColor: t.divider }]}
+                        activeOpacity={item.toggle ? 1 : 0.7}
+                        onPress={item.toggle ? item.onToggle : item.onPress}
                         disabled={!item.onPress && !item.toggle}
                       >
                         <View style={styles.menuItemLeft}>
-                          <View style={styles.menuIconWrap}>
+                          <View style={[styles.menuIconWrap, { backgroundColor: t.iconBgRed }]}>
                             <Ionicons name={item.icon} size={20} color={RED} />
                           </View>
-                          <Text style={styles.menuItemLabel}>{item.label}</Text>
+                          <Text style={[styles.menuItemLabel, { color: t.text }]}>{item.label}</Text>
                           {item.badge && (
                             <View style={styles.menuBadge}>
                               <Text style={styles.menuBadgeText}>{item.badge}</Text>
@@ -785,7 +841,13 @@ export default function ProfileScreen({ onAuthSuccess, onOrdersPress }) {
                           )}
                         </View>
                         {item.toggle ? (
-                          <View style={styles.toggleOff}><View style={styles.toggleThumb} /></View>
+                          <Switch
+                            value={item.toggleValue}
+                            onValueChange={item.onToggle}
+                            trackColor={{ false: "#e5e7eb", true: "#fca5a5" }}
+                            thumbColor={item.toggleValue ? RED : "#f3f4f6"}
+                            ios_backgroundColor="#e5e7eb"
+                          />
                         ) : (
                           <Ionicons name="chevron-forward" size={16} color="#ddd" />
                         )}
@@ -814,11 +876,19 @@ export default function ProfileScreen({ onAuthSuccess, onOrdersPress }) {
 
 // ─── ESTILOS PRINCIPALES ──────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  wrapper: { flex: 1, backgroundColor: "#f5f5f5" },
+  wrapper: { 
+    flex: 1, 
+    backgroundColor: "#f5f5f5",
+    paddingTop: Platform.OS === "ios" ? 54 : 44,
+  },
   header: {
-    backgroundColor: "#fff", paddingHorizontal: 20, paddingVertical: 16,
-    borderBottomWidth: 1, borderBottomColor: "#f0f0f0",
-    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    backgroundColor: "#fff", 
+    paddingHorizontal: 16, 
+    height: 72,
+    borderBottomWidth: 1, 
+    borderBottomColor: "#f0f0f0",
+    flexDirection: "row", 
+    alignItems: "center",
   },
   headerTitle: { fontSize: 18, fontWeight: "900", color: "#111" },
   scrollContent: { padding: 16 },
@@ -895,9 +965,25 @@ const styles = StyleSheet.create({
 
 // ─── ESTILOS SUB-PANTALLAS ────────────────────────────────────────────────────
 const sub = StyleSheet.create({
-  header: { backgroundColor: "#fff", paddingHorizontal: 16, paddingVertical: 14, flexDirection: "row", alignItems: "center", gap: 12, borderBottomWidth: 1, borderBottomColor: "#f0f0f0" },
-  backBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: "#f5f5f5", justifyContent: "center", alignItems: "center" },
-  title: { fontSize: 17, fontWeight: "900", color: "#111" },
+  header: { 
+    backgroundColor: "#fff", 
+    paddingHorizontal: 16, 
+    height: 72, 
+    flexDirection: "row", 
+    alignItems: "center", 
+    borderBottomWidth: 1, 
+    borderBottomColor: "#f0f0f0" 
+  },
+  backBtn: { 
+    width: 44, 
+    height: 44, 
+    borderRadius: 22, 
+    backgroundColor: "#f5f5f5", 
+    justifyContent: "center", 
+    alignItems: "center",
+    marginRight: 16,
+  },
+  title: { fontSize: 18, fontWeight: "900", color: "#111" },
 
   avatarRow: { alignItems: "center", marginBottom: 16 },
   avatar: { width: 80, height: 80, borderRadius: 40 },
@@ -919,6 +1005,10 @@ const sub = StyleSheet.create({
   emptyBox: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60, gap: 12 },
   emptyText: { fontSize: 14, color: "#bbb", fontWeight: "600", textAlign: "center" },
 
+  activeAddrCard: { backgroundColor: "#fff5f5", borderRadius: 14, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: "#fecaca" },
+  activeAddrTitle: { fontSize: 10, fontWeight: "800", color: RED, letterSpacing: 0.5 },
+  activeAddrText: { fontSize: 13, fontWeight: "700", color: "#111", marginBottom: 4 },
+  activeAddrHint: { fontSize: 11, color: "#888" },
   addrCard: { backgroundColor: "#fff", borderRadius: 14, padding: 14, marginBottom: 10, flexDirection: "row", alignItems: "center", gap: 12, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 },
   addrIcon: { width: 40, height: 40, borderRadius: 10, backgroundColor: "#f5f5f5", justifyContent: "center", alignItems: "center" },
   addrLabel: { fontSize: 13, fontWeight: "800", color: "#111" },

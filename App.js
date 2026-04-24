@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useRef, useState } from "react";
+// import * as Notifications from "expo-notifications";
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -17,13 +18,17 @@ import {
 } from "react-native";
 
 import MobileMenu from "./components/MobileMenu";
+import NotificationsPanel from "./components/NotificationsPanel";
 import ProductDetailModal from "./components/ProductDetailModal";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { CartProvider, useCart } from "./context/CartContext";
 import { LocationProvider, useLocation } from "./context/LocationContext";
+import { NotificationsProvider, useNotifications } from "./context/NotificationsContext";
+import { ThemeProvider, useTheme } from "./context/ThemeContext";
 import { WishlistProvider, useWishlist } from "./context/WishlistContext";
-import { getProducts, getUserOrders } from "./services/api";
+import { getProducts, getUserOrders, registerCustomerPushToken } from "./services/api";
+import { setupForegroundHandler, registerForPushNotifications } from "./services/notifications";
 import CartScreen from "./screens/CartScreen";
 import CheckoutScreen from "./screens/CheckoutScreen";
 import AdminScreen from "./screens/AdminScreen";
@@ -39,6 +44,7 @@ const RED = "#e6192e";
 // ─── CART DRAWER ──────────────────────────────────────────────────────────────
 function CartDrawer({ onClose, onCheckout }) {
   const { width } = useWindowDimensions();
+  const { t } = useTheme();
   const { items, removeFromCart, updateQty, clearCart, count } = useCart();
   const { deliveryAddress, setDeliveryAddress } = useLocation();
 
@@ -67,9 +73,9 @@ function CartDrawer({ onClose, onCheckout }) {
       />
 
       {/* Drawer Panel */}
-      <View style={[styles.drawerPanel, { width: drawerWidth }]}>
+      <View style={[styles.drawerPanel, { width: drawerWidth, backgroundColor: t.card }]}>
         {/* Header */}
-        <View style={styles.drawerHeader}>
+        <View style={[styles.drawerHeader, { backgroundColor: t.header, borderBottomColor: t.border }]}>
           <View style={styles.drawerHeaderLeft}>
             <Ionicons name="cart-sharp" size={22} color={RED} />
             <Text style={styles.drawerTitle}>MI CARRITO</Text>
@@ -253,6 +259,7 @@ function SettingsDrawer({ onClose, onOrdersPress }) {
   const { width } = useWindowDimensions();
   const { user, signOut } = useAuth();
   const { wishlist } = useWishlist();
+  const { isDark, t, toggleDark, notificationsEnabled, toggleNotifications } = useTheme();
   const drawerWidth = Math.min(440, width * 0.9);
   const [currentSection, setCurrentSection] = useState(null);
 
@@ -277,23 +284,23 @@ function SettingsDrawer({ onClose, onOrdersPress }) {
   return (
     <View style={[settingsStyles.backdrop, backdropStyle]}>
       <TouchableOpacity style={settingsStyles.overlay} activeOpacity={1} onPress={onClose} />
-      <View style={[settingsStyles.panel, { width: drawerWidth }]}>
+      <View style={[settingsStyles.panel, { width: drawerWidth, backgroundColor: t.card }]}>
         {/* Header */}
-        <View style={settingsStyles.header}>
+        <View style={[settingsStyles.header, { backgroundColor: t.header, borderBottomColor: t.border }]}>
           <View style={settingsStyles.headerLeft}>
             {currentSection ? (
               <TouchableOpacity onPress={() => setCurrentSection(null)} style={{ marginRight: 4 }}>
-                <Ionicons name="arrow-back" size={20} color="#333" />
+                <Ionicons name="arrow-back" size={20} color={t.text} />
               </TouchableOpacity>
             ) : (
               <Ionicons name="settings-sharp" size={20} color={RED} />
             )}
-            <Text style={settingsStyles.headerTitle}>
+            <Text style={[settingsStyles.headerTitle, { color: t.text }]}>
               {currentSection ? SUB_TITLES[currentSection] : "CONFIGURACIÓN"}
             </Text>
           </View>
           <TouchableOpacity onPress={onClose} style={settingsStyles.closeBtn}>
-            <Ionicons name="close" size={24} color="#333" />
+            <Ionicons name="close" size={24} color={t.text} />
           </TouchableOpacity>
         </View>
 
@@ -306,7 +313,7 @@ function SettingsDrawer({ onClose, onOrdersPress }) {
           <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
             {/* Profile card */}
             {user && (
-              <View style={settingsStyles.profileCard}>
+              <View style={[settingsStyles.profileCard, { backgroundColor: t.cardAlt }]}>
                 {user.photo ? (
                   <Image source={{ uri: user.photo }} style={settingsStyles.avatar} />
                 ) : (
@@ -317,19 +324,19 @@ function SettingsDrawer({ onClose, onOrdersPress }) {
                   </View>
                 )}
                 <View style={{ flex: 1 }}>
-                  <Text style={settingsStyles.profileName}>{(user.name || "USUARIO").toUpperCase()}</Text>
-                  <Text style={settingsStyles.profileEmail}>{user.email}</Text>
+                  <Text style={[settingsStyles.profileName, { color: t.text }]}>{(user.name || "USUARIO").toUpperCase()}</Text>
+                  <Text style={[settingsStyles.profileEmail, { color: t.textMuted }]}>{user.email}</Text>
                 </View>
               </View>
             )}
 
             {/* Stats */}
-            <View style={settingsStyles.statsRow}>
+            <View style={[settingsStyles.statsRow, { backgroundColor: t.cardAlt, borderTopColor: t.border, borderBottomColor: t.border }]}>
               {[["0", "Pedidos"], [String(wishlist?.length ?? 0), "Favoritos"], ["$0", "Ahorrado"]].map(([num, label], i, arr) => (
                 <View key={label} style={{ flex: 1, flexDirection: "row" }}>
                   <View style={settingsStyles.statItem}>
-                    <Text style={settingsStyles.statNum}>{num}</Text>
-                    <Text style={settingsStyles.statLabel}>{label}</Text>
+                    <Text style={[settingsStyles.statNum, { color: t.text }]}>{num}</Text>
+                    <Text style={[settingsStyles.statLabel, { color: t.textMuted }]}>{label}</Text>
                   </View>
                   {i < arr.length - 1 && <View style={settingsStyles.statDivider} />}
                 </View>
@@ -340,29 +347,48 @@ function SettingsDrawer({ onClose, onOrdersPress }) {
             <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
               {SETTINGS_SECTIONS.map((section, si) => (
                 <View key={si} style={{ marginBottom: 20 }}>
-                  <Text style={settingsStyles.sectionTitle}>{section.title}</Text>
-                  <View style={settingsStyles.sectionCard}>
-                    {section.items.map((item, ii) => (
-                      <View key={ii}>
-                        <TouchableOpacity
-                          style={settingsStyles.menuItem}
-                          activeOpacity={0.7}
-                          onPress={() => {
-                            if (item.key === "orders") { onClose(); onOrdersPress?.(); }
-                            else if (item.key) setCurrentSection(item.key);
-                          }}
-                        >
-                          <View style={settingsStyles.menuIcon}>
-                            <Ionicons name={item.icon} size={19} color={RED} />
-                          </View>
-                          <Text style={settingsStyles.menuLabel}>{item.label}</Text>
-                          {item.key && <Ionicons name="chevron-forward" size={15} color="#ddd" />}
-                        </TouchableOpacity>
-                        {ii < section.items.length - 1 && (
-                          <View style={settingsStyles.menuDivider} />
-                        )}
-                      </View>
-                    ))}
+                  <Text style={[settingsStyles.sectionTitle, { color: t.textMuted }]}>{section.title}</Text>
+                  <View style={[settingsStyles.sectionCard, { backgroundColor: t.card }]}>
+                    {section.items.map((item, ii) => {
+                      const isNotif = item.icon === "notifications-outline";
+                      const isDarkItem = item.icon === "moon-outline";
+                      const toggleValue = isNotif ? notificationsEnabled : isDark;
+                      const onToggle = isNotif
+                        ? () => toggleNotifications(registerForPushNotifications)
+                        : isDarkItem ? toggleDark : null;
+                      return (
+                        <View key={ii}>
+                          <TouchableOpacity
+                            style={settingsStyles.menuItem}
+                            activeOpacity={onToggle ? 1 : 0.7}
+                            onPress={() => {
+                              if (onToggle) { onToggle(); return; }
+                              if (item.key === "orders") { onClose(); onOrdersPress?.(); }
+                              else if (item.key) setCurrentSection(item.key);
+                            }}
+                          >
+                            <View style={settingsStyles.menuIcon}>
+                              <Ionicons name={item.icon} size={19} color={RED} />
+                            </View>
+                            <Text style={[settingsStyles.menuLabel, { color: t.text }]}>{item.label}</Text>
+                            {onToggle ? (
+                              <Switch
+                                value={toggleValue}
+                                onValueChange={onToggle}
+                                trackColor={{ false: "#e5e7eb", true: "#fca5a5" }}
+                                thumbColor={toggleValue ? RED : "#f3f4f6"}
+                                ios_backgroundColor="#e5e7eb"
+                              />
+                            ) : item.key ? (
+                              <Ionicons name="chevron-forward" size={15} color="#ddd" />
+                            ) : null}
+                          </TouchableOpacity>
+                          {ii < section.items.length - 1 && (
+                            <View style={settingsStyles.menuDivider} />
+                          )}
+                        </View>
+                      );
+                    })}
                   </View>
                 </View>
               ))}
@@ -389,11 +415,20 @@ const settingsStyles = StyleSheet.create({
   panel: {
     backgroundColor: "#fff",
     height: "100%",
-    shadowColor: "#000",
-    shadowOffset: { width: -4, height: 0 },
-    shadowOpacity: 0.18,
-    shadowRadius: 20,
-    elevation: 20,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: -4, height: 0 },
+        shadowOpacity: 0.18,
+        shadowRadius: 20,
+      },
+      android: {
+        elevation: 20,
+      },
+      web: {
+        boxShadow: "-4px 0 20px rgba(0,0,0,0.18)",
+      },
+    }),
     flexDirection: "column",
   },
   header: {
@@ -492,7 +527,7 @@ const settingsStyles = StyleSheet.create({
 const ORDER_STATUS = {
   pending:    { label: "Pendiente",  bg: "#fffbeb", color: "#f59e0b", icon: "time"             },
   processing: { label: "Preparando", bg: "#fffbeb", color: "#f59e0b", icon: "time"             },
-  shipped:    { label: "En camino",  bg: "#eff6ff", color: "#3b82f6", icon: "bicycle"          },
+  shipped:    { label: "En camino",  bg: "#fff5f5", color: RED,       icon: "bicycle"          },
   delivered:  { label: "Entregado",  bg: "#f0fdf4", color: "#22c55e", icon: "checkmark-circle" },
   cancelled:  { label: "Cancelado",  bg: "#fff1f2", color: RED,       icon: "close-circle"     },
 };
@@ -511,7 +546,7 @@ function OrdersDrawer({ onClose }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  const drawerWidth = Math.min(440, width * 0.9);
+  const drawerWidth = Math.min(520, width * 0.92);
   const isWeb = Platform.OS === "web";
   const backdropStyle = isWeb
     ? { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000 }
@@ -618,11 +653,20 @@ const odStyles = StyleSheet.create({
   panel: {
     backgroundColor: "#f5f5f5",
     height: "100%",
-    shadowColor: "#000",
-    shadowOffset: { width: -4, height: 0 },
-    shadowOpacity: 0.18,
-    shadowRadius: 20,
-    elevation: 20,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: -4, height: 0 },
+        shadowOpacity: 0.18,
+        shadowRadius: 20,
+      },
+      android: {
+        elevation: 20,
+      },
+      web: {
+        boxShadow: "-4px 0 20px rgba(0,0,0,0.18)",
+      },
+    }),
   },
   header: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
@@ -643,8 +687,20 @@ const odStyles = StyleSheet.create({
   sectionLabel: { fontSize: 11, fontWeight: "800", color: "#bbb", letterSpacing: 0.5, marginBottom: 12 },
   card: {
     backgroundColor: "#fff", borderRadius: 14, padding: 14, marginBottom: 10,
-    shadowColor: "#000", shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 6,
+      },
+      android: {
+        elevation: 2,
+      },
+      web: {
+        boxShadow: "0 1px 6px rgba(0,0,0,0.05)",
+      },
+    }),
   },
   cardTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
   orderId: { fontSize: 14, fontWeight: "800", color: "#111" },
@@ -906,8 +962,20 @@ const ckStyles = StyleSheet.create({
     backgroundColor: "#fff", borderRadius: 20,
     width: "100%", maxWidth: 540,
     maxHeight: "90%",
-    shadowColor: "#000", shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25, shadowRadius: 24, elevation: 16,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.25,
+        shadowRadius: 24,
+      },
+      android: {
+        elevation: 16,
+      },
+      web: {
+        boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+      },
+    }),
     overflow: "hidden",
     flexDirection: "column",
   },
@@ -952,16 +1020,27 @@ const ckStyles = StyleSheet.create({
 
 // ─── APP CONTENT ──────────────────────────────────────────────────────────────
 function AppContent() {
+  const { isDark, notificationsEnabled } = useTheme();
   const [activeTab, setActiveTab] = useState(0);
+  const [lastTab, setLastTab] = useState(0); // Para regresar desde favoritos
+  const [profileSub, setProfileSub] = useState(null);
+  const [storeCategory, setStoreCategory] = useState("all");
+  const [storeFilterTrigger, setStoreFilterTrigger] = useState(0);
+  const [productRefreshTrigger, setProductRefreshTrigger] = useState(0);
   const [cartDrawerOpen, setCartDrawerOpen] = useState(false);
   const [ordersDrawerOpen, setOrdersDrawerOpen] = useState(false);
   const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false);
+  const [notifPanelOpen, setNotifPanelOpen] = useState(false);
   const [navProducts, setNavProducts] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [inCheckout, setInCheckout] = useState(false);
+  const [isTracking, setIsTracking] = useState(false);
   const { width } = useWindowDimensions();
+  const isDesktop = width >= 1024;
   const { count } = useCart();
   const { user } = useAuth();
+  const { addNotification, unreadCount } = useNotifications();
+  const prevStatusMap = useRef({});
 
   // Carga productos para la búsqueda del navbar global
   useEffect(() => {
@@ -981,19 +1060,123 @@ function AppContent() {
         }
       })
       .catch(() => {});
-  }, []);
+  }, [productRefreshTrigger]);
 
-  const isDesktop = width >= 1024;
+  // ── Sincronización Global de Pedidos (Polleo) ───────────────────────────
+  // Esto detecta cambios de estado y los guarda en la "campanita" desde cualquier pantalla
+  useEffect(() => {
+    if (!user?.token || user?.role === "delivery") return;
+
+    const checkOrders = async () => {
+      try {
+        const res = await getUserOrders(user.token);
+        if (res?.success && Array.isArray(res.data)) {
+          res.data.forEach((o) => {
+            const prevStatus = prevStatusMap.current[o.id];
+            if (prevStatus && prevStatus !== o.status) {
+              setProductRefreshTrigger((v) => v + 1);
+              // Si el estado cambió, añadir a la campanita
+              const title = {
+                accepted:    "🛵 Repartidor asignado",
+                preparing:   "🏪 Preparando tu pedido",
+                picked_up:   "📦 Pedido recogido",
+                on_the_way:  "🛵 ¡En camino!",
+                arrived:     "🏠 ¡Tu repartidor llegó!",
+                delivered:   "✅ ¡Pedido entregado!",
+                cancelled:   "❌ Pedido cancelado",
+              }[o.status] || "Actualización de pedido";
+
+              const body = {
+                accepted:    "¡Ya tenemos un repartidor para tu pedido!",
+                preparing:   "Tu pedido se está preparando en la tienda",
+                picked_up:   "El repartidor ya tiene tu pedido en sus manos",
+                on_the_way:  "¡Tu pedido va en camino a tu dirección!",
+                arrived:     "Tu pedido está afuera. ¡Sal a recibirlo!",
+                delivered:   "¡Gracias por tu compra! Buen provecho",
+                cancelled:   "Tu pedido ha sido cancelado",
+              }[o.status] || `El estado de tu pedido #${String(o.id).padStart(6, "0")} ha cambiado.`;
+
+              addNotification({
+                title,
+                body: `Pedido #${String(o.id).padStart(6, "0")}: ${body}`,
+                type: o.status,
+                orderId: String(o.id),
+              });
+            }
+            prevStatusMap.current[o.id] = o.status;
+          });
+        }
+      } catch {}
+    };
+
+    checkOrders();
+    const timer = setInterval(checkOrders, 15000); // Revisar cada 15s
+    return () => clearInterval(timer);
+  }, [user?.token, user?.role, addNotification]);
+
+  // Registrar token de notificaciones push (solo si están habilitadas)
+  useEffect(() => {
+    if (user?.role !== "delivery") setupForegroundHandler();
+    if (!notificationsEnabled) return;
+    registerForPushNotifications().then((token) => {
+      if (token && user?.token) {
+        registerCustomerPushToken(token, user.token, Platform.OS).catch(() => {});
+      }
+    });
+  }, [user?.token, user?.role, notificationsEnabled]);
+
+  // Escuchar push notifications: guardar en contexto y abrir pedidos al tocar
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+
+    let foregroundSub;
+    let tapSub;
+
+    // Importación dinámica solo en nativo para evitar warnings en web
+    const setupListeners = async () => {
+      const Notifications = await import("expo-notifications");
+
+      // Notificación recibida con app abierta → guardar en historial in-app
+      foregroundSub = Notifications.addNotificationReceivedListener((notification) => {
+        const { title, body, data } = notification.request.content;
+        addNotification({
+          title: title || "Notificación",
+          body:  body  || "",
+          type:  data?.type || "info",
+          orderId: data?.order_id || null,
+        });
+      });
+
+      // Usuario toca la notificación (background/cerrada) → abrir pedidos
+      tapSub = Notifications.addNotificationResponseReceivedListener((response) => {
+        const { title, body, data } = response.notification.request.content;
+        addNotification({
+          title:   title || "Notificación",
+          body:    body  || "",
+          type:    data?.type || "info",
+          orderId: data?.order_id || null,
+        });
+        if (isDesktop) setOrdersDrawerOpen(true);
+        else setActiveTab(2);
+      });
+    };
+
+    setupListeners();
+
+    return () => {
+      if (foregroundSub) foregroundSub.remove();
+      if (tapSub) tapSub.remove();
+    };
+  }, [addNotification, isDesktop]);
 
   const nav = {
     onHomePress: () => setActiveTab(0),
     onStorePress: () => setActiveTab(1),
+    onCategoryPress: (name) => { setStoreCategory(name); setActiveTab(1); },
     onCartPress: isDesktop
       ? () => setCartDrawerOpen(true)
       : () => setActiveTab(4),
-    onOrdersPress: isDesktop
-      ? () => setOrdersDrawerOpen(true)
-      : () => setActiveTab(2),
+    onOrdersPress: isDesktop ? () => setOrdersDrawerOpen(true) : () => setActiveTab(2),
     onProfilePress: () => setActiveTab(3),
     onSettingsPress: () => setSettingsDrawerOpen(true),
   };
@@ -1013,11 +1196,19 @@ function AppContent() {
       case 0:
         return <HomeScreen {...nav} />;
       case 1:
-        return <StoreScreen {...nav} activeTab={activeTab} />;
+        return <StoreScreen {...nav} activeTab={activeTab} initialCategory={storeCategory} filterTrigger={storeFilterTrigger} refreshTrigger={productRefreshTrigger} />;
       case 2:
-        return <OrdersScreen {...nav} />;
+        if (isDesktop) return <HomeScreen {...nav} />;
+        return <OrdersScreen {...nav} onBack={() => setActiveTab(0)} onTrackingChange={setIsTracking} />;
       case 3:
-        return <ProfileScreen onAuthSuccess={() => setActiveTab(0)} onOrdersPress={() => setActiveTab(2)} />;
+        return (
+          <ProfileScreen
+            onAuthSuccess={() => setActiveTab(0)}
+            onOrdersPress={isDesktop ? () => setOrdersDrawerOpen(true) : () => setActiveTab(2)}
+            initialSubScreen={profileSub}
+            onReturn={() => { setProfileSub(null); setActiveTab(lastTab); }}
+          />
+        );
       case 4:
         return <CartScreen onBack={() => setActiveTab(0)} onCheckout={() => setInCheckout(true)} />;
       default:
@@ -1026,7 +1217,7 @@ function AppContent() {
   };
 
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: isDark ? "#111" : "#f5f5f5" }}>
       {/* Navbar global — solo desktop */}
       {isDesktop && (
         <DesktopNav
@@ -1035,31 +1226,39 @@ function AppContent() {
           onOrdersPress={() => setOrdersDrawerOpen(true)}
           onCartPress={() => setCartDrawerOpen(true)}
           onProfilePress={() => setActiveTab(3)}
+          onFavPress={() => { setLastTab(activeTab); setProfileSub("deseos"); setActiveTab(3); }}
           onSettingsPress={() => setSettingsDrawerOpen(true)}
           products={navProducts}
           onProductSelect={(product) => setSelectedProduct(product)}
           activeTabIndex={activeTab}
+          onNotifPress={() => setNotifPanelOpen(true)}
+          unreadCount={unreadCount}
         />
       )}
 
-      {/* Header fijo móvil — aparece en todas las páginas excepto Pedidos (tab 2) y Carrito (tab 4) */}
-      {!isDesktop && [0, 1, 3].includes(activeTab) && (
+      {/* Header fijo móvil — aparece en Inicio (0) y Tienda (1); se oculta en Pedidos (2), Perfil (3) y Carrito (4) */}
+      {!isDesktop && [0, 1].includes(activeTab) && (
         <MobileHeader
+          onFavPress={() => { setLastTab(activeTab); setProfileSub("deseos"); setActiveTab(3); }}
           onCartPress={() => setActiveTab(4)}
+          cartCount={count}
           products={navProducts}
           onProductSelect={(product) => setSelectedProduct(product)}
+          onFilterPress={activeTab === 1 ? () => setStoreFilterTrigger(v => v + 1) : null}
+          onNotifPress={() => setNotifPanelOpen(true)}
+          unreadCount={unreadCount}
         />
       )}
 
       {renderScreen()}
 
-      {!isDesktop && (
+      {!isDesktop && !isTracking && (
         <MobileMenu
           active={activeTab}
-          setActive={setActiveTab}
+          setActive={(tab) => { setProfileSub(null); setIsTracking(false); setActiveTab(tab); }}
           isDesktop={isDesktop}
           cartCount={count}
-          onCartPress={() => setActiveTab(4)}
+          onCartPress={() => { setProfileSub(null); setActiveTab(4); }}
         />
       )}
 
@@ -1071,6 +1270,7 @@ function AppContent() {
         <CheckoutScreen
           onBack={() => setInCheckout(false)}
           onSuccess={() => {
+            setProductRefreshTrigger(v => v + 1);
             setInCheckout(false);
             if (isDesktop) {
               setOrdersDrawerOpen(true);
@@ -1092,6 +1292,12 @@ function AppContent() {
         />
       )}
 
+      <NotificationsPanel
+        visible={notifPanelOpen}
+        onClose={() => setNotifPanelOpen(false)}
+        onOrderPress={() => { setNotifPanelOpen(false); setActiveTab(2); }}
+      />
+
       <ProductDetailModal
         visible={!!selectedProduct}
         product={selectedProduct}
@@ -1105,16 +1311,20 @@ function AppContent() {
 export default function App() {
   return (
     <SafeAreaProvider>
-      <AuthProvider>
-        <LocationProvider>
-          <CartProvider>
-            <WishlistProvider>
-              <AppContent />
-              <CookieBanner />
-            </WishlistProvider>
-          </CartProvider>
-        </LocationProvider>
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <LocationProvider>
+            <CartProvider>
+              <WishlistProvider>
+                <NotificationsProvider>
+                  <AppContent />
+                  <CookieBanner />
+                </NotificationsProvider>
+              </WishlistProvider>
+            </CartProvider>
+          </LocationProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </SafeAreaProvider>
   );
 }
@@ -1135,11 +1345,20 @@ const styles = StyleSheet.create({
   drawerPanel: {
     backgroundColor: "#fff",
     height: "100%",
-    shadowColor: "#000",
-    shadowOffset: { width: -4, height: 0 },
-    shadowOpacity: 0.18,
-    shadowRadius: 20,
-    elevation: 20,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: -4, height: 0 },
+        shadowOpacity: 0.18,
+        shadowRadius: 20,
+      },
+      android: {
+        elevation: 20,
+      },
+      web: {
+        boxShadow: "-4px 0 20px rgba(0,0,0,0.18)",
+      },
+    }),
     flexDirection: "column",
   },
 
@@ -1347,11 +1566,20 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     flexDirection: "row",
     marginTop: 6,
-    shadowColor: RED,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
+    ...Platform.select({
+      ios: {
+        shadowColor: RED,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+      web: {
+        boxShadow: "0 4px 8px rgba(230, 25, 46, 0.3)",
+      },
+    }),
   },
   drawerCheckoutText: {
     color: "#fff",

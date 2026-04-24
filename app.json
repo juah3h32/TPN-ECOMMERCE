@@ -10,10 +10,20 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.TPN"
+      "bundleIdentifier": "com.anonymous.TPN",
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.anonymous.TPN",
+      "googleServicesFile": "./google-services.json",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyCcPbr92rZz26wyw1hB4XLuBMfMxtDHE9o"
+        }
+      },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "usesCleartextTraffic": true,
@@ -23,7 +33,13 @@
       },
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.WAKE_LOCK",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.VIBRATE"
       ]
     },
     "web": {
@@ -46,12 +62,24 @@
       ],
       "expo-font",
       [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#e6192e"
+        }
+      ],
+      [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Todo Pal Negocio necesita tu ubicación para mostrarte la dirección de entrega.",
-          "locationWhenInUsePermission": "Todo Pal Negocio necesita tu ubicación para mostrarte la dirección de entrega."
+          "locationAlwaysAndWhenInUsePermission": "TPN necesita tu ubicación en segundo plano para que los clientes vean tu posición durante la entrega.",
+          "locationAlwaysPermission": "TPN necesita tu ubicación en segundo plano para que los clientes vean tu posición durante la entrega.",
+          "locationWhenInUsePermission": "TPN necesita tu ubicación para mostrarte la dirección de entrega.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
-      ]
+      ],
+      "expo-audio"
     ],
     "experiments": {
       "reactCompiler": true

@@ -7,6 +7,7 @@ import {
   Image,
   Modal,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -14,6 +15,9 @@ import {
   View,
 } from "react-native";
 import { useCart } from "../context/CartContext";
+import { useAuth } from "../context/AuthContext";
+import { useTheme } from "../context/ThemeContext";
+import LoginPromptSheet from "./LoginPromptSheet";
 import { getProduct } from "../services/api";
 
 const RED = "#e6192e";
@@ -21,14 +25,28 @@ const { width: SCREEN_W } = Dimensions.get("window");
 const IMG_H = 280;
 
 export default function ProductDetailModal({ visible, product, onClose }) {
+  const { t, isDark } = useTheme();
   const { addToCart, items } = useCart();
+  const { user } = useAuth();
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [activeImg, setActiveImg] = useState(0);
   const [qty, setQty] = useState(1);
   const [added, setAdded] = useState(false);
   const [stockMsg, setStockMsg] = useState("");
+  const [showLogin, setShowLogin] = useState(false);
   const flatRef = useRef(null);
+  const lastTapRef = useRef(0);
+
+  const handleDoubleTap = () => {
+    const now = Date.now();
+    if (now - lastTapRef.current < 350) {
+      onClose();
+      lastTapRef.current = 0;
+    } else {
+      lastTapRef.current = now;
+    }
+  };
 
   useEffect(() => {
     if (!visible || !product) return;
@@ -49,16 +67,17 @@ export default function ProductDetailModal({ visible, product, onClose }) {
   // Stock real viene del detalle (BD). Mientras carga usamos el del listado.
   const stock = detail?.stock ?? product?.stock ?? null;
   const stockTracked = stock !== null;
+  const isUnlimited  = stock === -1;
   const inCartQty = items.find((i) => i.id === product?.id)?.qty ?? 0;
-  const available = stockTracked ? Math.max(0, stock - inCartQty) : Infinity;
-  const isAgotado = stockTracked && stock === 0;
-  const atMax = stockTracked && inCartQty >= stock;
+  const available = isUnlimited ? Infinity : (stockTracked ? Math.max(0, stock - inCartQty) : Infinity);
+  const isAgotado = !isUnlimited && stockTracked && stock === 0;
+  const atMax     = !isUnlimited && stockTracked && inCartQty >= stock;
 
   const changeQty = (delta) => {
     setStockMsg("");
     const next = qty + delta;
     if (next < 1) return;
-    if (stockTracked && next > available) {
+    if (!isUnlimited && stockTracked && next > available) {
       setStockMsg(
         available === 0
           ? "Ya tienes todo el stock disponible en tu carrito"
@@ -71,6 +90,7 @@ export default function ProductDetailModal({ visible, product, onClose }) {
 
   const handleAdd = () => {
     const result = addToCart({ ...product, stock }, qty);
+    if (result.authRequired) { setShowLogin(true); return; }
     if (!result.ok) {
       setStockMsg(result.message);
       return;
@@ -92,6 +112,7 @@ export default function ProductDetailModal({ visible, product, onClose }) {
   const cardW = isDesktop ? Math.min(520, SCREEN_W * 0.5) : SCREEN_W;
 
   return (
+    <>
     <Modal
       visible={visible}
       transparent
@@ -99,21 +120,29 @@ export default function ProductDetailModal({ visible, product, onClose }) {
       statusBarTranslucent
       onRequestClose={onClose}
     >
-      {/* Backdrop */}
+      {/* Backdrop — doble toque para cerrar */}
       <TouchableOpacity
-        style={styles.backdrop}
+        style={[styles.backdrop, { backgroundColor: t.overlay }]}
         activeOpacity={1}
-        onPress={onClose}
+        onPress={handleDoubleTap}
       />
 
-      {/* Card */}
-      <View
-        style={[styles.card, isDesktop && styles.cardDesktop, { width: cardW }]}
-        pointerEvents="box-none"
+      {/* Card — doble toque en cualquier parte para cerrar */}
+      <Pressable
+        style={[styles.card, isDesktop && styles.cardDesktop, { width: cardW, backgroundColor: t.card }]}
+        onPress={handleDoubleTap}
       >
         {/* Cerrar */}
-        <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
-          <Ionicons name="close" size={20} color="#444" />
+        <TouchableOpacity style={[styles.closeBtn, { backgroundColor: isDark ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.9)" }]} onPress={onClose}>
+          <Ionicons name="close" size={20} color={t.text} />
+        </TouchableOpacity>
+
+        {/* Hint doble toque */}
+        <TouchableOpacity style={styles.doubleTapHint} onPress={handleDoubleTap} activeOpacity={0.6}>
+          <View style={[styles.dragHandle, { backgroundColor: isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.12)" }]} />
+          <Text style={[styles.doubleTapText, { color: t.textMuted }]}>
+            <Ionicons name="finger-print-outline" size={11} /> Toca 2 veces el fondo para cerrar
+          </Text>
         </TouchableOpacity>
 
         <ScrollView
@@ -122,7 +151,7 @@ export default function ProductDetailModal({ visible, product, onClose }) {
           contentContainerStyle={{ paddingBottom: 24 }}
         >
           {/* Galería de imágenes */}
-          <View style={styles.gallery}>
+          <View style={[styles.gallery, { backgroundColor: "#fff" }]}>
             <FlatList
               ref={flatRef}
               data={images}
@@ -148,7 +177,7 @@ export default function ProductDetailModal({ visible, product, onClose }) {
                 {images.map((_, i) => (
                   <View
                     key={i}
-                    style={[styles.dot, i === activeImg && styles.dotActive]}
+                    style={[styles.dot, { backgroundColor: t.border }, i === activeImg && styles.dotActive]}
                   />
                 ))}
               </View>
@@ -163,8 +192,8 @@ export default function ProductDetailModal({ visible, product, onClose }) {
 
           {/* Info */}
           <View style={styles.info}>
-            <Text style={styles.cat}>{product.cat}</Text>
-            <Text style={styles.name}>{product.name}</Text>
+            <Text style={[styles.cat, { color: t.textMuted }]}>{product.cat}</Text>
+            <Text style={[styles.name, { color: t.text }]}>{product.name}</Text>
             <Text style={styles.price}>
               {detail?.price_display || product.price}
             </Text>
@@ -173,9 +202,9 @@ export default function ProductDetailModal({ visible, product, onClose }) {
             {loading ? (
               <ActivityIndicator size="small" color={RED} style={{ marginTop: 16 }} />
             ) : detail?.description ? (
-              <View style={styles.descBox}>
-                <Text style={styles.descTitle}>Descripción</Text>
-                <Text style={styles.desc}>{detail.description}</Text>
+              <View style={[styles.descBox, { backgroundColor: t.cardAlt }]}>
+                <Text style={[styles.descTitle, { color: t.textMuted }]}>Descripción</Text>
+                <Text style={[styles.desc, { color: t.textSub }]}>{detail.description}</Text>
               </View>
             ) : null}
 
@@ -204,26 +233,26 @@ export default function ProductDetailModal({ visible, product, onClose }) {
 
             {/* Mensaje de error de stock */}
             {stockMsg !== "" && (
-              <View style={styles.stockErrBox}>
+              <View style={[styles.stockErrBox, { backgroundColor: isDark ? "#3a2a0a" : "#fff3e0" }]}>
                 <Ionicons name="warning-outline" size={14} color="#e65100" />
-                <Text style={styles.stockErrText}>{stockMsg}</Text>
+                <Text style={[styles.stockErrText, { color: isDark ? "#ff9800" : "#e65100" }]}>{stockMsg}</Text>
               </View>
             )}
 
             {/* Cantidad + agregar */}
             <View style={styles.footer}>
-              <View style={styles.qtyRow}>
+              <View style={[styles.qtyRow, { backgroundColor: t.iconBg }]}>
                 <TouchableOpacity
-                  style={styles.qtyBtn}
+                  style={[styles.qtyBtn, { backgroundColor: t.iconBg }]}
                   onPress={() => changeQty(-1)}
                 >
-                  <Text style={styles.qtyBtnText}>-</Text>
+                  <Text style={[styles.qtyBtnText, { color: t.text }]}>-</Text>
                 </TouchableOpacity>
-                <Text style={styles.qtyVal}>{qty}</Text>
+                <Text style={[styles.qtyVal, { color: t.text }]}>{qty}</Text>
                 <TouchableOpacity
                   style={[
                     styles.qtyBtn,
-                    { backgroundColor: atMax || qty >= available ? "#ccc" : RED },
+                    { backgroundColor: atMax || qty >= available ? t.border : RED },
                   ]}
                   onPress={() => changeQty(1)}
                   disabled={atMax || qty >= available}
@@ -260,8 +289,10 @@ export default function ProductDetailModal({ visible, product, onClose }) {
             </View>
           </View>
         </ScrollView>
-      </View>
+      </Pressable>
     </Modal>
+    <LoginPromptSheet visible={showLogin} onClose={() => setShowLogin(false)} />
+    </>
   );
 }
 
@@ -309,10 +340,11 @@ const styles = StyleSheet.create({
   gallery: {
     width: "100%",
     height: IMG_H,
-    backgroundColor: "#fafafa",
+    backgroundColor: "#fff",
   },
   img: {
     height: IMG_H,
+    backgroundColor: "#fff",
   },
   dots: {
     position: "absolute",
@@ -414,4 +446,21 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   stockErrText: { color: "#e65100", fontSize: 13, fontWeight: "600", flex: 1 },
+
+  doubleTapHint: {
+    alignItems: "center",
+    paddingTop: 10,
+    paddingBottom: 6,
+  },
+  dragHandle: {
+    width: 38,
+    height: 4,
+    borderRadius: 2,
+    marginBottom: 6,
+  },
+  doubleTapText: {
+    fontSize: 11,
+    color: "#aaa",
+    letterSpacing: 0.2,
+  },
 });

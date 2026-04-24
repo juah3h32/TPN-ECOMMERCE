@@ -10,6 +10,7 @@ export function LocationProvider({ children }) {
   const [permissionStatus, setPermissionStatus] = useState(null);
   const [loading, setLoading] = useState(false);
   const [deliveryAddress, setDeliveryAddress] = useState("");
+  const [deliveryCoords, setDeliveryCoordsState] = useState(null);
   const manualOverride = useRef(false);
 
   // Wrap setDeliveryAddress so that setting a value marks manual override
@@ -18,9 +19,14 @@ export function LocationProvider({ children }) {
     setDeliveryAddress(value);
   };
 
+  const setDeliveryCoords = (coords) => {
+    setDeliveryCoordsState(coords);
+  };
+
   const resetDeliveryAddress = () => {
     manualOverride.current = false;
     setDeliveryAddress(address);
+    setDeliveryCoordsState(null);
   };
 
   const requestLocation = async () => {
@@ -117,6 +123,8 @@ export function LocationProvider({ children }) {
         requestLocation,
         deliveryAddress,
         setDeliveryAddress: setDeliveryAddressManual,
+        deliveryCoords,
+        setDeliveryCoords,
         resetDeliveryAddress,
       }}
     >

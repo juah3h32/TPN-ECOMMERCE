@@ -9,6 +9,12 @@ import {
   Text,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useTheme } from "../context/ThemeContext";
+
+// Clearance screens must add as paddingBottom to not be covered by the menu:
+// BAR_HEIGHT(62) + bottom gap(8) + breathing room(14) = 84
+export const MENU_CLEARANCE = 84;
 
 const { width } = Dimensions.get("window");
 const TAB_COUNT = 5;
@@ -34,6 +40,8 @@ const TAB_INDEX_MAP = [0, 1, 4, 2, 3];
 const APP_INDEX_MAP = { 0: 0, 1: 1, 4: 2, 2: 3, 3: 4 };
 
 export default function MobileMenu({ active, setActive, isDesktop, cartCount = 0, onCartPress }) {
+  const { t } = useTheme();
+  const { bottom: safeBottom } = useSafeAreaInsets();
   if (isDesktop) return null;
 
   // Convert app tab index (0-4) to menu index (0-4)
@@ -69,9 +77,8 @@ export default function MobileMenu({ active, setActive, isDesktop, cartCount = 0
 
     if (appIdx === 4 && onCartPress) {
       onCartPress();
-    } else {
-      setActive(appIdx);
     }
+    setActive(appIdx);
   };
 
   const tabWidth = BAR_WIDTH / TAB_COUNT;
@@ -83,12 +90,12 @@ export default function MobileMenu({ active, setActive, isDesktop, cartCount = 0
   });
 
   return (
-    <View style={styles.wrapper} pointerEvents="box-none">
-      <View style={styles.bar}>
+    <View style={[styles.wrapper, { bottom: safeBottom + 8 }]} pointerEvents="box-none">
+      <View style={[styles.bar, { backgroundColor: t.tabBar }]}>
         {/* Pill animado */}
         <Animated.View style={[styles.pill, { left: pillLeft }]} />
 
-        {TABS.map((t, i) => {
+        {TABS.map((tab, i) => {
           const isActive = menuActive === i;
           const isCart = i === 2;
           const showBadge = isCart && cartCount > 0;
@@ -105,20 +112,20 @@ export default function MobileMenu({ active, setActive, isDesktop, cartCount = 0
               >
                 <View style={{ position: "relative" }}>
                   <Ionicons
-                    name={isActive ? t.icon : `${t.icon}-outline`}
+                    name={isActive ? tab.icon : `${tab.icon}-outline`}
                     size={isCart ? 24 : 21}
-                    color={isActive ? "#1a1a1a" : "#b0b0b0"}
+                    color={isActive ? "#1a1a1a" : t.textMuted}
                   />
                   {showBadge && (
-                    <View style={styles.badge}>
+                    <View style={[styles.badge, { borderColor: t.tabBar }]}>
                       <Text style={styles.badgeText}>
                         {cartCount > 9 ? "9+" : cartCount}
                       </Text>
                     </View>
                   )}
                 </View>
-                <Text style={[styles.tabLabel, isActive && styles.tabLabelActive]}>
-                  {t.label}
+                <Text style={[styles.tabLabel, { color: t.textMuted }, isActive && styles.tabLabelActive]}>
+                  {tab.label}
                 </Text>
               </Animated.View>
             </Pressable>
@@ -132,7 +139,6 @@ export default function MobileMenu({ active, setActive, isDesktop, cartCount = 0
 const styles = StyleSheet.create({
   wrapper: {
     position: "absolute",
-    bottom: Platform.OS === "ios" ? 20 : 12,
     left: 0,
     right: 0,
     alignItems: "center",

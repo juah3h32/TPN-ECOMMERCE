@@ -110,11 +110,18 @@ CREATE TABLE IF NOT EXISTS `stores` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT IGNORE INTO `stores` (name, city, address, lat, lng, sort_order) VALUES
-  ('20 de Noviembre', 'Morelia',    'Calle 20 de Noviembre #825',      19.7061000, -101.1950000, 1),
-  ('Calle Zamora',    'Morelia',    'Calle Zamora #395',               19.7074000, -101.1970000, 2),
-  ('TPN Zacapu',      'Zacapu',     'Calle Lic. Eduardo Ruiz #178',    19.8248000, -101.7907000, 3),
-  ('TPN Uruapan',     'Uruapan',    'Calle Sarabia #30',               19.4157000, -102.0573000, 4),
-  ('TPN Maravatío',   'Maravatío',  'Calle Álvaro Obregón #206',       19.9092000, -100.4381000, 5);
+  ('20 de Noviembre', 'Morelia',    'Calle 20 de Noviembre #825, Centro Histórico', 19.7043800, -101.1836400, 1),
+  ('Calle Zamora',    'Morelia',    'Calle Zamora #395, Colonia Juárez',            19.6953836, -101.1992192, 2),
+  ('TPN Zacapu',      'Zacapu',     'Calle Lic. Eduardo Ruiz #178, Centro',         19.8188000, -101.7907500, 3),
+  ('TPN Uruapan',     'Uruapan',    'Calle Sarabia #30, Col. Ramón Farías',         19.4185000, -102.0525000, 4),
+  ('TPN Maravatío',   'Maravatío',  'Calle Álvaro Obregón #206, Centro',            19.8784000, -100.4558000, 5);
+
+-- Corregir coordenadas en bases de datos existentes
+UPDATE `stores` SET lat = 19.7043800, lng = -101.1836400, address = 'Calle 20 de Noviembre #825, Centro Histórico' WHERE name = '20 de Noviembre';
+UPDATE `stores` SET lat = 19.6953836, lng = -101.1992192, address = 'Calle Zamora #395, Colonia Juárez'            WHERE name = 'Calle Zamora';
+UPDATE `stores` SET lat = 19.8188000, lng = -101.7907500, address = 'Calle Lic. Eduardo Ruiz #178, Centro'         WHERE name = 'TPN Zacapu';
+UPDATE `stores` SET lat = 19.4185000, lng = -102.0525000, address = 'Calle Sarabia #30, Col. Ramón Farías'         WHERE name = 'TPN Uruapan';
+UPDATE `stores` SET lat = 19.8784000, lng = -100.4558000, address = 'Calle Álvaro Obregón #206, Centro'            WHERE name = 'TPN Maravatío';
 
 -- ─── PEDIDOS ─────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS `orders` (
@@ -132,6 +139,11 @@ CREATE TABLE IF NOT EXISTS `orders` (
   `delivery_lng`      DECIMAL(10,7) NULL,
   `store_id`          INT UNSIGNED NULL,
   `notes`             TEXT NULL,
+  `payment_method`    VARCHAR(60) NULL,
+  `payment_status`    VARCHAR(20) NOT NULL DEFAULT 'pending',
+  `customer_name`     VARCHAR(120) NULL,
+  `customer_email`    VARCHAR(180) NULL,
+  `notified_nearby`   TINYINT(1) NOT NULL DEFAULT 0,
   `created_at`        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at`        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (`user_id`) REFERENCES `users`(`id`)
@@ -177,7 +189,15 @@ INSERT INTO `products` (`name`, `category`, `price`, `unit`, `image_url`, `promo
 -- ► NUEVAS MIGRACIONES — repartidores por sucursal:
 -- ALTER TABLE `users` ADD COLUMN IF NOT EXISTS `role` VARCHAR(20) NOT NULL DEFAULT 'customer' AFTER `active`;
 -- ALTER TABLE `users` ADD COLUMN IF NOT EXISTS `store_id` INT UNSIGNED NULL AFTER `role`;
+-- ALTER TABLE `users` ADD COLUMN IF NOT EXISTS `push_token` VARCHAR(255) DEFAULT NULL;
 -- ALTER TABLE `users` ADD CONSTRAINT fk_user_store FOREIGN KEY (`store_id`) REFERENCES `stores`(`id`) ON DELETE SET NULL;
 -- ► Para asignar un repartidor a una sucursal:
 -- UPDATE users SET role='delivery', store_id=1 WHERE id=<ID_REPARTIDOR>;
 -- ► Para ver los IDs de las sucursales: SELECT id, name FROM stores;
+
+-- ► MIGRACIÓN — columnas de pedidos:
+-- ALTER TABLE `orders` ADD COLUMN IF NOT EXISTS `payment_method` VARCHAR(60) NULL;
+-- ALTER TABLE `orders` ADD COLUMN IF NOT EXISTS `payment_status` VARCHAR(20) NOT NULL DEFAULT 'pending';
+-- ALTER TABLE `orders` ADD COLUMN IF NOT EXISTS `customer_name` VARCHAR(120) NULL;
+-- ALTER TABLE `orders` ADD COLUMN IF NOT EXISTS `customer_email` VARCHAR(180) NULL;
+-- ALTER TABLE `orders` ADD COLUMN IF NOT EXISTS `notified_nearby` TINYINT(1) NOT NULL DEFAULT 0;

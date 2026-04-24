@@ -8,9 +8,13 @@
 //   "https://todopalnegocio.com.mx/api/index.php"
 export const API_BASE_URL = "https://todopalnegocio.com.mx/api/index.php";
 
-// Token de Mapbox — gratis en mapbox.com (100k requests/mes gratis)
-// Para obtenerlo: https://account.mapbox.com → Create a token
-export const MAPBOX_TOKEN = "PONER_TU_TOKEN_AQUI";
+// Token de Mapbox — (Deshabilitado, usando Google Maps)
+// export const MAPBOX_TOKEN = "TU_MAPBOX_TOKEN";
+
+// Google Maps API Key — para iOS/Android nativo y Directions API
+// Obtén la tuya en: console.cloud.google.com → APIs & Services → Credentials
+// Habilita: Maps SDK for Android, Maps SDK for iOS, Directions API
+export const GOOGLE_MAPS_API_KEY = "TU_GOOGLE_MAPS_API_KEY";
 
 const DEFAULT_TIMEOUT = 30000; // 30 segundos
 
@@ -183,12 +187,30 @@ export async function updateDeliveryStatus(orderId, status, token) {
 }
 
 // ─── ADMIN ────────────────────────────────────────────────────────────────────
+export async function adminGetProducts(token) {
+  return apiFetch("admin/products", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function adminUpdateProduct(productId, data, token) {
+  return apiFetch(`admin/products/${productId}`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify(data),
+  });
+}
+
 export async function adminGetUsers(token) {
-  return apiFetch("admin/users", { headers: { Authorization: `Bearer ${token}` } });
+  return apiFetch("admin/users", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
 }
 
 export async function adminGetStores(token) {
-  return apiFetch("admin/stores", { headers: { Authorization: `Bearer ${token}` } });
+  return apiFetch("admin/stores", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
 }
 
 export async function adminUpdateUser(userId, data, token) {
@@ -202,5 +224,36 @@ export async function adminUpdateUser(userId, data, token) {
 export async function getOrderTracking(orderId, token) {
   return apiFetch(`tracking/${orderId}`, {
     headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function registerPushToken(pushToken, token) {
+  return apiFetch("delivery/push-token", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ push_token: pushToken }),
+  });
+}
+
+export async function cancelOrder(orderId, token) {
+  return apiFetch(`orders/${orderId}/cancel`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function registerCustomerPushToken(pushToken, userToken, platform) {
+  return apiFetch("user/push-token", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ push_token: pushToken, platform }),
+  });
+}
+
+export async function rateOrder(orderId, rating, comment, token) {
+  return apiFetch(`orders/${orderId}/rate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ rating, comment }),
   });
 }

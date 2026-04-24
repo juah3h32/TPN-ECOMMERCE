@@ -5,14 +5,15 @@ $DB_NAME = 'u992666585_TPN';
 $DB_USER = 'u992666585_TPN_USER';
 $DB_PASS = 'JUANPA9912a';
 
-// Contraseña simple para proteger esta página
-define('ADMIN_PASS', 'tpnadmin2024');
+// Hash bcrypt de 'tpnadmin2024' — cámbialo con: password_hash('tupass', PASSWORD_BCRYPT)
+define('ADMIN_PASS_HASH', '$2y$11$wVZ7ZNTY2c/ej.4OWZCiC.lbCuimCFvBRoBgPuELbD1hEnlS0VNp.');
 
 session_start();
 
 // ─── LOGIN SIMPLE ────────────────────────────────────────────────────────────
 if (isset($_POST['pass'])) {
-    if ($_POST['pass'] === ADMIN_PASS) {
+    if (password_verify($_POST['pass'], ADMIN_PASS_HASH)) {
+        session_regenerate_id(true);
         $_SESSION['tpn_admin'] = true;
     } else {
         $loginError = 'Contraseña incorrecta';
@@ -41,13 +42,45 @@ try {
 $msg = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
+    if ($_POST['action'] === 'create_repartidor') {
+        $name    = trim($_POST['name'] ?? '');
+        $email   = trim($_POST['email'] ?? '');
+        $pass    = $_POST['password'] ?? '';
+        $phone   = trim($_POST['phone'] ?? '') ?: null;
+        $storeId = !empty($_POST['store_id']) ? (int)$_POST['store_id'] : null;
+
+        if (!$name || !$email || !$pass) {
+            $msg = 'error:Nombre, correo y contraseña son obligatorios';
+        } else {
+            $exists = $pdo->prepare("SELECT id FROM users WHERE email=? LIMIT 1");
+            $exists->execute([$email]);
+            if ($exists->fetch()) {
+                $msg = 'error:Ya existe un usuario con ese correo';
+            } else {
+                $hash = password_hash($pass, PASSWORD_BCRYPT);
+                $pdo->prepare(
+                    "INSERT INTO users (name, email, password_hash, phone, role, store_id, email_verified, active)
+                     VALUES (?, ?, ?, ?, 'delivery', ?, 1, 1)"
+                )->execute([$name, $email, $hash, $phone, $storeId]);
+                $msg = 'success:Repartidor "' . htmlspecialchars($name) . '" creado correctamente';
+            }
+        }
+    }
+
     if ($_POST['action'] === 'update_user') {
         $uid     = (int)$_POST['user_id'];
         $role    = in_array($_POST['role'], ['customer','delivery','admin']) ? $_POST['role'] : 'customer';
         $storeId = !empty($_POST['store_id']) ? (int)$_POST['store_id'] : null;
-        $pdo->prepare("UPDATE users SET role=?, store_id=? WHERE id=?")
-            ->execute([$role, $storeId, $uid]);
+        $phone   = trim($_POST['phone'] ?? '') ?: null;
+        $pdo->prepare("UPDATE users SET role=?, store_id=?, phone=? WHERE id=?")
+            ->execute([$role, $storeId, $phone, $uid]);
         $msg = 'success:Usuario actualizado correctamente';
+    }
+
+    if ($_POST['action'] === 'delete_user') {
+        $uid = (int)$_POST['user_id'];
+        $pdo->prepare("DELETE FROM users WHERE id=? AND role='delivery'")->execute([$uid]);
+        $msg = 'success:Repartidor eliminado';
     }
 
     if ($_POST['action'] === 'bulk_assign') {
@@ -66,7 +99,8 @@ $stores = $pdo->query("SELECT id, name, address FROM stores WHERE active=1 ORDER
 $users  = $pdo->query(
     "SELECT u.id, u.name, u.email, u.photo_url,
             COALESCE(u.role,'customer') AS role,
-            u.store_id, s.name AS store_name, u.created_at
+            u.store_id, s.name AS store_name,
+            COALESCE(u.phone,'') AS phone, u.created_at
      FROM users u
      LEFT JOIN stores s ON s.id = u.store_id
      ORDER BY u.role DESC, u.name ASC"
@@ -146,7 +180,7 @@ if ($msg) {
 
   /* Badges */
   .badge{display:inline-flex;align-items:center;gap:4px;padding:4px 9px;border-radius:8px;font-size:11px;font-weight:700;}
-  .badge-delivery{background:#eff6ff;color:#3b82f6;}
+  .badge-delivery{background:#fff1f2;color:#e6192e;}
   .badge-admin{background:#fff1f2;color:#e6192e;}
   .badge-customer{background:#f3f4f6;color:#6b7280;}
   .badge-store{background:#fff0f1;color:#e6192e;font-size:10px;}
@@ -162,12 +196,33 @@ if ($msg) {
   .checkbox-col{width:36px;}
   input[type=checkbox]{width:16px;height:16px;cursor:pointer;accent-color:#e6192e;}
 
+  /* Botón nuevo */
+  .btn-primary{background:#e6192e;color:#fff;border:none;padding:9px 18px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;}
+  .btn-danger{background:#fff1f2;color:#e6192e;border:1px solid #fecdd3;padding:6px 12px;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;}
+
+  /* Modal overlay */
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;align-items:center;justify-content:center;}
+  .modal-overlay.open{display:flex;}
+  .modal{background:#fff;border-radius:20px;width:100%;max-width:460px;margin:16px;box-shadow:0 20px 60px rgba(0,0,0,.2);overflow:hidden;}
+  .modal-head{padding:20px 24px 0;display:flex;align-items:center;justify-content:space-between;}
+  .modal-head h2{font-size:16px;font-weight:900;color:#111;}
+  .btn-close{background:none;border:none;font-size:22px;color:#aaa;cursor:pointer;line-height:1;}
+  .modal-body{padding:20px 24px 24px;}
+  .field{margin-bottom:14px;}
+  .field label{font-size:12px;font-weight:700;color:#555;display:block;margin-bottom:5px;}
+  .field input,.field select{width:100%;padding:10px 13px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:14px;outline:none;}
+  .field input:focus,.field select:focus{border-color:#e6192e;}
+  .field .hint{font-size:11px;color:#aaa;margin-top:3px;}
+  .field-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .modal-footer{display:flex;gap:8px;justify-content:flex-end;padding-top:8px;}
+
   @media(max-width:640px){
     .stats{grid-template-columns:repeat(2,1fr);}
     table thead{display:none;}
     tbody tr{display:block;padding:12px;border:1px solid #f0f0f0;border-radius:12px;margin-bottom:8px;}
     td{display:block;padding:4px 0;}
     td::before{content:attr(data-label);font-size:10px;color:#aaa;font-weight:700;display:block;}
+    .field-row{grid-template-columns:1fr;}
   }
 </style>
 </head>
@@ -209,7 +264,10 @@ $sinAsignar = count(array_filter($users, fn($u) => $u['role']==='delivery' && !$
 <!-- Tabla usuarios -->
 <div class="card">
   <div class="card-header">
-    <span class="card-title">USUARIOS (<?= $total ?>)</span>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span class="card-title">USUARIOS (<?= $total ?>)</span>
+      <button class="btn-primary" onclick="openModal()">＋ Nuevo repartidor</button>
+    </div>
     <!-- Asignación masiva -->
     <form method="POST" class="bulk-form" id="bulkForm">
       <input type="hidden" name="action" value="bulk_assign">
@@ -280,7 +338,16 @@ $sinAsignar = count(array_filter($users, fn($u) => $u['role']==='delivery' && !$
           <?= date('d/m/Y', strtotime($u['created_at'])) ?>
         </td>
         <td>
-          <button class="btn-edit" onclick="showEdit(<?= $u['id'] ?>, '<?= $u['role'] ?>', '<?= $u['store_id'] ?>')">Editar</button>
+          <div style="display:flex;gap:6px;">
+            <button class="btn-edit" onclick="showEdit(<?= $u['id'] ?>, '<?= $u['role'] ?>', '<?= $u['store_id'] ?>')">Editar</button>
+            <?php if ($u['role'] === 'delivery'): ?>
+            <form method="POST" style="display:inline" onsubmit="return confirm('¿Eliminar a <?= htmlspecialchars(addslashes($u['name'])) ?>?')">
+              <input type="hidden" name="action" value="delete_user">
+              <input type="hidden" name="user_id" value="<?= $u['id'] ?>">
+              <button type="submit" class="btn-danger">✕</button>
+            </form>
+            <?php endif; ?>
+          </div>
         </td>
       </tr>
       <!-- Fila edit inline -->
@@ -303,6 +370,7 @@ $sinAsignar = count(array_filter($users, fn($u) => $u['role']==='delivery' && !$
                 </option>
               <?php endforeach; ?>
             </select>
+            <input type="text" name="phone" placeholder="Teléfono" value="<?= htmlspecialchars($u['phone']) ?>" style="width:130px;height:34px;border-radius:8px;border:1px solid #e5e7eb;padding:0 10px;font-size:13px;">
             <button type="submit" class="btn-save">Guardar</button>
             <button type="button" class="btn-cancel" onclick="hideEdit(<?= $u['id'] ?>)">Cancelar</button>
           </form>
@@ -314,6 +382,54 @@ $sinAsignar = count(array_filter($users, fn($u) => $u['role']==='delivery' && !$
 </div>
 
 </div><!-- /container -->
+
+<!-- ══ MODAL NUEVO REPARTIDOR ══════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modalOverlay" onclick="closeOnOverlay(event)">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>🏍 Nuevo repartidor</h2>
+      <button class="btn-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <form method="POST" id="createForm">
+        <input type="hidden" name="action" value="create_repartidor">
+        <div class="field-row">
+          <div class="field">
+            <label>Nombre completo *</label>
+            <input type="text" name="name" placeholder="Juan Pérez" required>
+          </div>
+          <div class="field">
+            <label>Teléfono</label>
+            <input type="tel" name="phone" placeholder="443 123 4567">
+          </div>
+        </div>
+        <div class="field">
+          <label>Correo electrónico *</label>
+          <input type="email" name="email" placeholder="juan@ejemplo.com" required>
+          <div class="hint">Este será su usuario para entrar a la app</div>
+        </div>
+        <div class="field">
+          <label>Contraseña temporal *</label>
+          <input type="password" name="password" placeholder="Mínimo 6 caracteres" minlength="6" required>
+          <div class="hint">El repartidor podrá cambiarla desde la app</div>
+        </div>
+        <div class="field">
+          <label>Sucursal asignada</label>
+          <select name="store_id">
+            <option value="">— Sin asignar por ahora —</option>
+            <?php foreach ($stores as $st): ?>
+              <option value="<?= $st['id'] ?>"><?= htmlspecialchars($st['name']) ?> — <?= htmlspecialchars($st['address']) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-cancel" onclick="closeModal()">Cancelar</button>
+          <button type="submit" class="btn-primary">Crear repartidor</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
 
 <script>
 function showEdit(id, role, storeId) {
@@ -347,6 +463,18 @@ function collectChecked() {
   });
   return true;
 }
+// Modal
+function openModal() {
+  document.getElementById('modalOverlay').classList.add('open');
+  document.querySelector('#createForm input[name=name]').focus();
+}
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('open');
+}
+function closeOnOverlay(e) {
+  if (e.target === document.getElementById('modalOverlay')) closeModal();
+}
+document.addEventListener('keydown', function(e){ if (e.key === 'Escape') closeModal(); });
 </script>
 </body>
 </html>

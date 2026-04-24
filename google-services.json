@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "1041797301392",
+    "project_id": "todopalnegocio",
+    "storage_bucket": "todopalnegocio.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1041797301392:android:0980e9677ae754967b8415",
+        "android_client_info": {
+          "package_name": "com.anonymous.TPN"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1041797301392-bckkn1p8hs4okj4jo5fase4akvn882mq.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD7z0aloKnzl6mSx5jXubOf7fx4lafwP7A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1041797301392-bckkn1p8hs4okj4jo5fase4akvn882mq.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

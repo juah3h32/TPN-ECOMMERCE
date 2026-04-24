@@ -1,6 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useRef, useState, useEffect, useCallback } from "react";
-import { getStores } from "../services/api";
+import React, { useRef, useState, useEffect, useCallback } from "react";
+import { getStores, GOOGLE_MAPS_API_KEY } from "../services/api";
+import { useTheme } from "../context/ThemeContext";
+import { GOOGLE_MAPS_DARK_STYLE } from "../constants/theme";
+import { MapView, Marker, PROVIDER_GOOGLE } from "./MapComponents";
 import {
   ActivityIndicator,
   FlatList,
@@ -13,11 +16,39 @@ import {
   View,
   KeyboardAvoidingView,
 } from "react-native";
-import { WebView } from "react-native-webview";
 
-const RED = "#e6192e";
+const RED    = "#e6192e";
+const ORANGE = "#f59e0b";
+const GREEN  = "#22c55e";
 
-// ─── SUCURSALES TPN ───────────────────────────────────────────────────────────
+// Zonas de cobertura (km en línea recta desde la sucursal más cercana)
+export const COVERAGE_KM  = 10;  // cobertura normal
+export const EXTENDED_KM  = 15;  // zona extendida (llega pero más tiempo)
+
+// Consultar tiempo real en auto con tráfico vía Google Directions API
+async function fetchDrivingETA(fromLat, fromLng, toLat, toLng) {
+  try {
+    if (!GOOGLE_MAPS_API_KEY || GOOGLE_MAPS_API_KEY === "TU_GOOGLE_MAPS_API_KEY") return null;
+    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${fromLat},${fromLng}&destination=${toLat},${toLng}&key=${GOOGLE_MAPS_API_KEY}&departure_time=now`;
+    const res  = await fetch(url);
+    const data = await res.json();
+    const leg = data?.routes?.[0]?.legs?.[0];
+    const secs = leg?.duration_in_traffic?.value || leg?.duration?.value;
+    if (!secs) return null;
+    const min = Math.ceil((secs / 60 + 10) / 5) * 5; // +10 min preparación, redondear a 5
+    return min;
+  } catch {
+    return null;
+  }
+}
+
+function formatMinutes(min) {
+  if (!min) return null;
+  return min >= 60
+    ? `~${Math.floor(min / 60)}h ${min % 60 > 0 ? `${min % 60} min` : ""} en auto`.trim()
+    : `~${min} min en auto`;
+}
+
 export const TPN_STORES = [
   { name: "20 de Noviembre", city: "Morelia", address: "Calle 20 de Noviembre #825", lat: 19.7061, lng: -101.1950 },
   { name: "Calle Zamora",    city: "Morelia", address: "Calle Zamora #395",           lat: 19.7074, lng: -101.1970 },
@@ -26,7 +57,6 @@ export const TPN_STORES = [
   { name: "TPN Maravatío",  city: "Maravatío",address: "Calle Álvaro Obregón #206",  lat: 19.9092, lng: -100.4381 },
 ];
 
-// ─── HAVERSINE: distancia entre dos coordenadas en km ────────────────────────
 function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -47,86 +77,12 @@ function findNearestStore(lat, lng, storeList) {
   }, { ...list[0], dist: haversineKm(lat, lng, list[0].lat, list[0].lng) });
 }
 
-// ─── HTML MAPA LEAFLET ────────────────────────────────────────────────────────
-function getMapHTML(lat, lng) {
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<meta name="referrer" content="no-referrer">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<style>
-  *{margin:0;padding:0;box-sizing:border-box}
-  html,body,#map{width:100%;height:100%;overflow:hidden;}
-  .leaflet-control-attribution{font-size:9px;}
-</style>
-</head>
-<body>
-<div id="map"></div>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
-  var lat=${lat}, lng=${lng};
-  var map = L.map('map', {zoomControl:false}).setView([lat,lng], 15);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{
-    maxZoom:19,
-    subdomains:'abcd',
-    attribution:'© <a href="https://carto.com/attributions">CARTO</a> © <a href="https://www.openstreetmap.org/copyright">OSM</a>'
-  }).addTo(map);
-  L.control.zoom({position:'bottomright'}).addTo(map);
-
-  var icon = L.divIcon({
-    html: '<div style="width:26px;height:26px;background:#e6192e;border-radius:50%;border:3px solid #fff;box-shadow:0 3px 10px rgba(0,0,0,.4);position:relative;"><div style="position:absolute;bottom:-10px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-top:12px solid #e6192e;"></div></div>',
-    iconSize:[26,38],
-    iconAnchor:[13,38],
-    className:''
-  });
-
-  var marker = L.marker([lat,lng], {icon:icon, draggable:true}).addTo(map);
-
-  function send(la, ln){
-    var msg = JSON.stringify({lat:la, lng:ln});
-    try{ window.ReactNativeWebView.postMessage(msg); }catch(e){
-      try{ window.parent.postMessage(msg,'*'); }catch(e2){}
-    }
-  }
-
-  marker.on('dragend', function(e){
-    var p = e.target.getLatLng();
-    send(p.lat, p.lng);
-  });
-
-  map.on('click', function(e){
-    marker.setLatLng(e.latlng);
-    map.panTo(e.latlng);
-    send(e.latlng.lat, e.latlng.lng);
-  });
-
-  // Recibir pan desde RN
-  function handleMsg(e){
-    try{
-      var d = JSON.parse(typeof e.data === 'string' ? e.data : '{}');
-      if(d.lat && d.lng){
-        marker.setLatLng([d.lat, d.lng]);
-        map.flyTo([d.lat, d.lng], 15, {duration:0.8});
-      }
-    }catch(err){}
-  }
-  document.addEventListener('message', handleMsg);
-  window.addEventListener('message', handleMsg);
-</script>
-</body>
-</html>`;
-}
-
 // ─── BÚSQUEDA CON NOMINATIM ───────────────────────────────────────────────────
-// viewbox cubre Michoacán y zonas cercanas (oeste MX)
 const MX_VIEWBOX = "-103.8,18.9,-99.8,20.5";
 
 async function searchNominatim(query) {
-  // Si el query ya menciona ciudad o estado, no añadir contexto
   const needsContext = !/michoacán|michoacan|morelia|uruapan|zacapu|maravat/i.test(query);
   const q = needsContext ? `${query}, Michoacán, México` : query;
-
   const params = new URLSearchParams({
     q,
     format: "json",
@@ -134,58 +90,32 @@ async function searchNominatim(query) {
     "accept-language": "es",
     countrycodes: "mx",
     viewbox: MX_VIEWBOX,
-    bounded: "1",          // solo resultados dentro del viewbox
+    bounded: "1",
     addressdetails: "1",
   });
-
-  const res = await fetch(
-    `https://nominatim.openstreetmap.org/search?${params}`,
-    { headers: { "User-Agent": "TPN-App/1.0", Accept: "application/json" } }
-  );
-  const data = await res.json();
-
-  // Si bounded no devuelve nada, reintentar sin bounded (por si escribió otra ciudad de MX)
-  if (!data.length) {
-    const params2 = new URLSearchParams({
-      q,
-      format: "json",
-      limit: "6",
-      "accept-language": "es",
-      countrycodes: "mx",
-      addressdetails: "1",
-    });
-    const res2 = await fetch(
-      `https://nominatim.openstreetmap.org/search?${params2}`,
-      { headers: { "User-Agent": "TPN-App/1.0", Accept: "application/json" } }
-    );
-    return res2.json();
-  }
-
-  return data;
-}
-
-async function reverseNominatim(lat, lng) {
-  // zoom=18 → nivel de número de casa/calle (más preciso que zoom=16 barrio)
-  const url =
-    `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&accept-language=es&zoom=18&addressdetails=1`;
-  const res = await fetch(url, {
-    headers: { "User-Agent": "TPN-App/1.0", Accept: "application/json" },
-  });
+  const res = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, { headers: { "User-Agent": "TPN-App/1.0" } });
   return res.json();
 }
 
-// ─── COMPONENT ────────────────────────────────────────────────────────────────
+async function reverseNominatim(lat, lng) {
+  const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&accept-language=es&zoom=18&addressdetails=1`;
+  const res = await fetch(url, { headers: { "User-Agent": "TPN-App/1.0" } });
+  return res.json();
+}
+
 export default function LocationPickerModal({
   visible,
   onClose,
   onConfirm,
-  currentCoords,       // { lat, lng } del GPS actual
-  businessCoords,      // ignorado — se usa TPN_STORES para distancias
-  popup = false,       // true → Modal transparente (PC), false → Modal fullscreen
+  currentCoords,
+  businessCoords,
+  popup = false,
+  inline = false,
 }) {
-  const webViewRef = useRef(null);
+  const { t, isDark } = useTheme();
+  const mapRef = useRef(null);
   const searchTimer = useRef(null);
-  const openedAt = useRef(0); // para evitar que el backdrop cierre al mismo click que abre
+  const openedAt = useRef(0);
 
   const defaultLat = currentCoords?.latitude ?? currentCoords?.lat ?? 19.7044;
   const defaultLng = currentCoords?.longitude ?? currentCoords?.lng ?? -101.2262;
@@ -199,30 +129,20 @@ export default function LocationPickerModal({
   const [nearestStore, setNearestStore] = useState(null);
   const [mapReady, setMapReady] = useState(false);
   const [stores, setStores] = useState(TPN_STORES);
+  const [etaMinutes, setEtaMinutes] = useState(null);
+  const [etaLoading, setEtaLoading] = useState(false);
 
-  // Cargar sucursales desde la BD una sola vez
   useEffect(() => {
-    getStores()
-      .then((res) => {
-        if (res?.success && Array.isArray(res.data) && res.data.length > 0) {
-          setStores(res.data.map((s) => ({
-            ...s,
-            lat: parseFloat(s.lat),
-            lng: parseFloat(s.lng),
-          })));
-        }
-      })
-      .catch(() => {}); // usa TPN_STORES como fallback
+    getStores().then((res) => {
+      if (res?.success && Array.isArray(res.data)) {
+        setStores(res.data.map(s => ({ ...s, lat: parseFloat(s.lat), lng: parseFloat(s.lng) })));
+      }
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
     if (visible) {
       openedAt.current = Date.now();
-      setSearchText("");
-      setResults([]);
-      setSelectedAddress("");
-      setNearestStore(null);
-      setMapReady(false);
       const lat = currentCoords?.latitude ?? currentCoords?.lat ?? defaultLat;
       const lng = currentCoords?.longitude ?? currentCoords?.lng ?? defaultLng;
       setSelectedCoords({ lat, lng });
@@ -232,48 +152,25 @@ export default function LocationPickerModal({
 
   const doReverse = async (lat, lng) => {
     setReverseLoading(true);
+    setEtaMinutes(null);
     try {
       const data = await reverseNominatim(lat, lng);
       if (data?.display_name) {
-        const short = buildShortAddress(data);
-        setSelectedAddress(short);
+        const a = data.address || {};
+        const street = [a.road || a.pedestrian, a.house_number].filter(Boolean).join(" ");
+        const short = [street, a.suburb || a.neighbourhood, a.city || a.town].filter(Boolean).join(", ");
+        setSelectedAddress(short || data.display_name);
       }
     } catch {}
-    // Siempre calcular la sucursal más cercana
     const store = findNearestStore(lat, lng, stores);
     setNearestStore(store);
     setReverseLoading(false);
-  };
-
-  function buildShortAddress(data) {
-    const a = data.address || {};
-    // "Calle Nombre 123, Colonia, Ciudad"
-    const street = [
-      a.road || a.pedestrian || a.path || a.footway,
-      a.house_number,
-    ].filter(Boolean).join(" ");
-    const parts = [
-      street,
-      a.suburb || a.neighbourhood || a.quarter || a.village,
-      a.city || a.town || a.municipality,
-    ].filter(Boolean);
-    return parts.length ? parts.join(", ") : data.display_name;
-  }
-
-  // Formatea el label del resultado de búsqueda: "Calle, Colonia, Ciudad"
-  // Omite país y estado para mantenerlo corto y local
-  const formatResultLabel = (item) => {
-    const a = item.address || {};
-    const line1 = [
-      a.road || a.pedestrian || a.path || a.neighbourhood || a.suburb,
-      a.house_number,
-    ].filter(Boolean).join(" ");
-    const line2 = [
-      a.suburb || a.neighbourhood || a.quarter,
-      a.city || a.town || a.village || a.municipality,
-    ].filter(Boolean).join(", ");
-    const parts = [line1, line2].filter(Boolean);
-    return parts.length ? parts.join(", ") : item.display_name.split(",").slice(0, 3).join(",").trim();
+    if (store && store.dist <= EXTENDED_KM) {
+      setEtaLoading(true);
+      const min = await fetchDrivingETA(store.lat, store.lng, lat, lng);
+      setEtaMinutes(min);
+      setEtaLoading(false);
+    }
   };
 
   const handleSearchChange = (text) => {
@@ -293,30 +190,31 @@ export default function LocationPickerModal({
   const selectResult = (item) => {
     const lat = parseFloat(item.lat);
     const lng = parseFloat(item.lon);
-    setSelectedCoords({ lat, lng });
-    const short = formatResultLabel(item);
-    setSelectedAddress(short || item.display_name);
+    const coords = { lat, lng };
+    setSelectedCoords(coords);
+    setSelectedAddress(item.display_name.split(",").slice(0,3).join(","));
     setSearchText("");
     setResults([]);
-    setNearestStore(findNearestStore(lat, lng, stores));
-    // Mover el mapa
     panMap(lat, lng);
+    doReverse(lat, lng);
   };
 
   const panMap = (lat, lng) => {
-    const js = `(function(){
-      var e = new MessageEvent('message', {data: JSON.stringify({lat:${lat},lng:${lng}})});
-      window.dispatchEvent(e);
-    })(); true;`;
-    webViewRef.current?.injectJavaScript(js);
+    mapRef.current?.animateToRegion({
+      latitude: lat,
+      longitude: lng,
+      latitudeDelta: 0.005,
+      longitudeDelta: 0.005,
+    }, 1000);
   };
 
-  const handleWebViewMessage = (event) => {
-    try {
-      const { lat, lng } = JSON.parse(event.nativeEvent.data);
+  const onMapPress = (e) => {
+    const coords = e.nativeEvent.coordinate;
+    if (coords) {
+      const { latitude: lat, longitude: lng } = coords;
       setSelectedCoords({ lat, lng });
       doReverse(lat, lng);
-    } catch {}
+    }
   };
 
   const confirm = () => {
@@ -326,229 +224,134 @@ export default function LocationPickerModal({
   };
 
   const distance = nearestStore?.dist ?? null;
+  const outOfRange  = distance !== null && distance > EXTENDED_KM;
+  const isExtended  = distance !== null && distance > COVERAGE_KM && distance <= EXTENDED_KM;
+  const canConfirm  = !!selectedAddress && !outOfRange;
 
-  const formatDistance = (d) => {
-    if (d === null) return "";
-    if (d < 1) return `${Math.round(d * 1000)} m`;
-    return `${d.toFixed(1)} km`;
-  };
-
-  const gpsAction = () => {
-    const lat = currentCoords?.latitude ?? currentCoords?.lat;
-    const lng = currentCoords?.longitude ?? currentCoords?.lng;
-    if (lat && lng) {
-      setSelectedCoords({ lat, lng });
-      doReverse(lat, lng);
-      panMap(lat, lng);
+  const mapSection = () => {
+    if (!MapView) {
+      return (
+        <View style={[styles.mapWrap, { backgroundColor: isDark ? "#1c1c1e" : "#e8e8e8", justifyContent: "center", alignItems: "center" }]}>
+          <Ionicons name="map-outline" size={48} color="#aaa" />
+          <Text style={{ color: "#aaa", marginTop: 8, fontSize: 13 }}>Mapa no disponible en web</Text>
+        </View>
+      );
     }
+    return (
+      <View style={[styles.mapWrap, { backgroundColor: isDark ? "#1c1c1e" : "#e8e8e8" }]}>
+        <MapView
+          ref={mapRef}
+          provider={PROVIDER_GOOGLE}
+          style={styles.map}
+          customMapStyle={isDark ? GOOGLE_MAPS_DARK_STYLE : []}
+          initialRegion={{
+            latitude: selectedCoords.lat,
+            longitude: selectedCoords.lng,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          }}
+          onPress={onMapPress}
+          showsUserLocation
+          userInterfaceStyle={isDark ? "dark" : "light"}
+          onMapReady={() => setMapReady(true)}
+        >
+          <Marker coordinate={{ latitude: selectedCoords.lat, longitude: selectedCoords.lng }} draggable onDragEnd={(e) => onMapPress(e)}>
+             <View style={[styles.markerCircle, { backgroundColor: RED }]}>
+                <Ionicons name="location" size={24} color="#fff" />
+             </View>
+          </Marker>
+        </MapView>
+        {!mapReady && <View style={[styles.mapLoading, { backgroundColor: t.bg }]}><ActivityIndicator size="large" color={RED} /></View>}
+        <View style={styles.mapHintWrap} pointerEvents="none">
+          <View style={[styles.mapHintPill, { backgroundColor: isDark ? "rgba(30,30,30,0.9)" : "rgba(255,255,255,0.9)" }]}>
+            <Text style={[styles.mapHintText, { color: t.textSub }]}>Toca el mapa o arrastra el pin</Text>
+          </View>
+        </View>
+      </View>
+    );
   };
 
-  // ── Sección búsqueda ──────────────────────────────────────────────────────
-  const searchSection = (compact) => (
-    <>
-      <View style={[styles.searchWrap, compact && { margin: 10, height: 42 }]}>
+  const content = (
+    <KeyboardAvoidingView style={[styles.container, { backgroundColor: t.bg }]} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <View style={[styles.header, { backgroundColor: t.card, borderBottomColor: t.border }]}>
+        <TouchableOpacity onPress={onClose} style={[styles.closeBtn, { backgroundColor: t.iconBg }]}>
+          <Ionicons name="close" size={24} color={t.text} />
+        </TouchableOpacity>
+        <Text style={[styles.headerTitle, { color: t.text }]}>¿Dónde te entregamos?</Text>
+        <View style={{ width: 40 }} />
+      </View>
+
+      <View style={[styles.searchWrap, { backgroundColor: t.iconBg }]}>
         <Ionicons name="search" size={18} color={RED} style={{ marginLeft: 14 }} />
         <TextInput
           value={searchText}
           onChangeText={handleSearchChange}
           placeholder="Busca tu calle, colonia o ciudad..."
-          placeholderTextColor="#bbb"
-          style={styles.searchInput}
+          placeholderTextColor={t.placeholder}
+          style={[styles.searchInput, { color: t.text }]}
           returnKeyType="search"
-          autoCorrect={false}
         />
-        {searching ? (
-          <ActivityIndicator size="small" color={RED} style={{ marginRight: 12 }} />
-        ) : searchText.length > 0 ? (
-          <TouchableOpacity onPress={() => { setSearchText(""); setResults([]); }} style={{ marginRight: 12 }}>
-            <Ionicons name="close-circle" size={18} color="#ccc" />
-          </TouchableOpacity>
-        ) : null}
+        {searching && <ActivityIndicator size="small" color={RED} style={{ marginRight: 12 }} />}
       </View>
 
       {results.length > 0 && (
-        <View style={[styles.resultsList, compact && { marginHorizontal: 10 }]}>
+        <View style={[styles.resultsList, { backgroundColor: t.card }]}>
           <FlatList
             data={results}
             keyExtractor={(_, i) => String(i)}
-            keyboardShouldPersistTaps="always"
             renderItem={({ item }) => (
               <TouchableOpacity style={styles.resultItem} onPress={() => selectResult(item)}>
-                <Ionicons name="location-outline" size={16} color={RED} style={{ marginRight: 10, marginTop: 2 }} />
-                <Text style={styles.resultText} numberOfLines={2}>{formatResultLabel(item)}</Text>
+                <Text style={[styles.resultText, { color: t.text }]} numberOfLines={2}>{item.display_name}</Text>
               </TouchableOpacity>
             )}
-            ItemSeparatorComponent={() => <View style={styles.resultSep} />}
+            ItemSeparatorComponent={() => <View style={[styles.resultSep, { backgroundColor: t.divider }]} />}
           />
         </View>
       )}
-    </>
-  );
 
-  // ── Sección mapa ──────────────────────────────────────────────────────────
-  const mapSection = (mapHeight) => (
-    <View style={[styles.mapWrap, mapHeight && { height: mapHeight, flex: 0 }]}>
-      <WebView
-        ref={webViewRef}
-        source={{ html: getMapHTML(defaultLat, defaultLng) }}
-        onMessage={handleWebViewMessage}
-        onLoad={() => setMapReady(true)}
-        style={styles.map}
-        javaScriptEnabled
-        domStorageEnabled
-        originWhitelist={["*"]}
-        allowUniversalAccessFromFileURLs
-        scrollEnabled={false}
-        bounces={false}
-        allowsInlineMediaPlayback
-        mixedContentMode="always"
-      />
-      {!mapReady && (
-        <View style={styles.mapLoading}>
-          <ActivityIndicator size="large" color={RED} />
-          <Text style={styles.mapLoadingText}>Cargando mapa...</Text>
-        </View>
-      )}
-      {mapReady && (
-        <View style={styles.mapHintWrap} pointerEvents="none">
-          <View style={styles.mapHintPill}>
-            <Ionicons name="hand-left-outline" size={13} color="#555" />
-            <Text style={styles.mapHintText}>Toca el mapa o arrastra el pin</Text>
-          </View>
-        </View>
-      )}
-    </View>
-  );
+      {mapSection()}
 
-  // ── Panel inferior ────────────────────────────────────────────────────────
-  const bottomSection = (compact) => (
-    <View style={[styles.bottomPanel, compact && { paddingBottom: 14, paddingTop: 12, gap: 8 }]}>
-      {reverseLoading ? (
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-          <ActivityIndicator size="small" color={RED} />
-          <Text style={{ color: "#aaa", fontSize: 13 }}>Obteniendo dirección...</Text>
-        </View>
-      ) : (
+      <View style={[styles.bottomPanel, { backgroundColor: t.card, borderTopColor: t.border }]}>
         <View style={styles.selectedRow}>
-          <View style={styles.pinIconWrap}>
-            <Ionicons name="location-sharp" size={22} color={RED} />
-          </View>
+          <View style={styles.pinIconWrap}><Ionicons name="location-sharp" size={22} color={outOfRange ? t.border : RED} /></View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.selectedLabel}>Dirección de entrega</Text>
-            <Text style={[styles.selectedAddress, compact && { fontSize: 13 }]} numberOfLines={2}>
-              {selectedAddress || "Selecciona un punto en el mapa"}
-            </Text>
-            {distance !== null && nearestStore && (
-              <View style={styles.distanceRow}>
-                <Ionicons name="storefront-outline" size={13} color="#888" />
-                <Text style={styles.distanceText}>
-                  {nearestStore.name}
-                  <Text style={{ color: "#bbb" }}> · </Text>
-                  {formatDistance(distance)}
-                </Text>
+            <Text style={[styles.selectedLabel, { color: t.textMuted }]}>Dirección de entrega</Text>
+            <Text style={[styles.selectedAddress, { color: t.text }]} numberOfLines={2}>{selectedAddress || "Cargando..."}</Text>
+            {nearestStore && (
+              <View style={styles.etaRow}>
+                <View style={[styles.etaBadge, { backgroundColor: isExtended ? (isDark ? "#3a2a0a" : "#fffbeb") : (isDark ? "#153a15" : "#f0fdf4"), borderColor: (isExtended ? ORANGE : GREEN) + "44" }]}>
+                  <Ionicons name="car-outline" size={13} color={isExtended ? ORANGE : GREEN} />
+                  {etaLoading ? <ActivityIndicator size={10} color={isExtended ? ORANGE : GREEN} /> : <Text style={[styles.etaText, { color: isExtended ? ORANGE : GREEN }]}>{formatMinutes(etaMinutes) || "..."}</Text>}
+                </View>
+                <Text style={[styles.distanceText, { color: t.textMuted }]}>{nearestStore.dist.toFixed(1)} km · {nearestStore.name}</Text>
+              </View>
+            )}
+            {outOfRange && (
+              <View style={[styles.coverageCard, { backgroundColor: t.iconBgRed }]}>
+                <Text style={styles.coverageTitle}>Fuera de cobertura</Text>
               </View>
             )}
           </View>
         </View>
-      )}
 
-      {compact ? (
-        // PC popup: botones en fila
-        <View style={{ flexDirection: "row", gap: 8 }}>
-          <TouchableOpacity style={[styles.gpsBtn, { flex: 1, justifyContent: "center", paddingVertical: 12 }]} onPress={gpsAction}>
-            <Ionicons name="navigate" size={15} color={RED} />
-            <Text style={styles.gpsBtnText}>Mi ubicación</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.confirmBtn, !selectedAddress && styles.confirmBtnDisabled, { flex: 2, paddingVertical: 12 }]}
-            onPress={confirm}
-            disabled={!selectedAddress}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="checkmark-circle" size={18} color="#fff" style={{ marginRight: 6 }} />
-            <Text style={[styles.confirmText, { fontSize: 13 }]}>CONFIRMAR</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        // Móvil: botones apilados
-        <>
-          <TouchableOpacity style={styles.gpsBtn} onPress={gpsAction}>
-            <Ionicons name="navigate" size={15} color={RED} />
-            <Text style={styles.gpsBtnText}>Usar mi ubicación actual</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.confirmBtn, !selectedAddress && styles.confirmBtnDisabled]}
-            onPress={confirm}
-            disabled={!selectedAddress}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="checkmark-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
-            <Text style={styles.confirmText}>CONFIRMAR DIRECCIÓN</Text>
-          </TouchableOpacity>
-        </>
-      )}
-    </View>
+        <TouchableOpacity
+          style={[styles.confirmBtn, !canConfirm && styles.confirmBtnDisabled, !canConfirm && { backgroundColor: isDark ? "#3a3a3c" : "#ddd", shadowOpacity: 0, elevation: 0 }]}
+          onPress={confirm}
+          disabled={!canConfirm}
+        >
+          <Text style={styles.confirmText}>{outOfRange ? "SIN COBERTURA" : "CONFIRMAR DIRECCIÓN"}</Text>
+        </TouchableOpacity>
+      </View>
+    </KeyboardAvoidingView>
   );
 
-  // ── Modo popup PC — Modal transparente para evitar clipping ───────────────
-  if (popup) {
-    return (
-      <Modal
-        visible={visible}
-        transparent
-        animationType="fade"
-        statusBarTranslucent
-        onRequestClose={onClose}
-      >
-        <TouchableOpacity
-          style={styles.popupBackdrop}
-          onPress={() => { if (Date.now() - openedAt.current > 400) onClose(); }}
-          activeOpacity={1}
-        >
-          <View
-            onStartShouldSetResponder={() => true}
-            onResponderGrant={() => {}}
-            style={styles.popupCard}
-            {...(Platform.OS === "web" ? { onClick: (e) => e.stopPropagation() } : {})}
-          >
-            <View style={styles.popupHeader}>
-              <Text style={styles.headerTitle}>¿Dónde te entregamos?</Text>
-              <TouchableOpacity onPress={onClose} style={styles.popupCloseBtn}>
-                <Ionicons name="close" size={18} color="#555" />
-              </TouchableOpacity>
-            </View>
-            {searchSection(true)}
-            {mapSection(220)}
-            {bottomSection(true)}
-          </View>
-        </TouchableOpacity>
-      </Modal>
-    );
+  if (inline) {
+    return content;
   }
 
-  // ── Modo fullscreen móvil ─────────────────────────────────────────────────
   return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      statusBarTranslucent
-      onRequestClose={onClose}
-    >
-      <KeyboardAvoidingView
-        style={styles.container}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
-        <View style={styles.header}>
-          <TouchableOpacity onPress={onClose} style={styles.closeBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Ionicons name="close" size={24} color="#333" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>¿Dónde te entregamos?</Text>
-          <View style={{ width: 40 }} />
-        </View>
-        {searchSection(false)}
-        {mapSection(null)}
-        {bottomSection(false)}
-      </KeyboardAvoidingView>
+    <Modal visible={visible} animationType="slide" statusBarTranslucent onRequestClose={onClose}>
+      {content}
     </Modal>
   );
 }
@@ -680,6 +483,7 @@ const styles = StyleSheet.create({
     flex: 1,
     position: "relative",
     overflow: "hidden",
+    ...(Platform.OS === "web" ? { minHeight: 260 } : {}),
   },
   map: {
     flex: 1,
@@ -714,6 +518,7 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   mapHintText: { fontSize: 12, color: "#555", fontWeight: "600" },
+  markerCircle: { width: 40, height: 40, borderRadius: 20, justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#fff" },
 
   // Panel inferior
   bottomPanel: {
@@ -757,11 +562,55 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 5,
     marginTop: 5,
+    flexWrap: "wrap",
   },
   distanceText: {
     fontSize: 12,
     color: "#888",
     fontWeight: "600",
+    flexShrink: 1,
+  },
+  etaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 6,
+    flexWrap: "wrap",
+  },
+  etaBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  etaText: {
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  coverageCard: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    marginTop: 8,
+    backgroundColor: "#fff1f2",
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#fecdd3",
+  },
+  coverageTitle: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: RED,
+    marginBottom: 3,
+  },
+  coverageSub: {
+    fontSize: 12,
+    color: "#555",
+    lineHeight: 17,
   },
   gpsBtn: {
     flexDirection: "row",

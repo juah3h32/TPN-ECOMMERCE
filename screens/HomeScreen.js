@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -15,6 +15,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
+import { useTheme } from "../context/ThemeContext";
 import { useWishlist } from "../context/WishlistContext";
 import { useLocation } from "../context/LocationContext";
 
@@ -23,6 +24,7 @@ import { useLocation } from "../context/LocationContext";
 export const MOBILE_HEADER_FIXED = 99;
 import { getCategories, getProducts, getPromos } from "../services/api";
 import LocationPickerModal from "../components/LocationPickerModal";
+import LoginPromptSheet from "../components/LoginPromptSheet";
 import ProductDetailModal from "../components/ProductDetailModal";
 
 // ─── CONSTANTES ──────────────────────────────────────────────────────────────
@@ -137,90 +139,154 @@ function useHomeData() {
 // ─── PRODUCT CARD ─────────────────────────────────────────────────────────────
 function ProductCard({ item, isDesktop, cardWidth, onPress }) {
   const [qty, setQty] = useState(1);
-  const { addToCart } = useCart();
+  const [added, setAdded] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
+  const { addToCart, items } = useCart();
   const { toggleWishlist, isWishlisted } = useWishlist();
+  const { t } = useTheme();
   const wishlisted = isWishlisted(item.id);
+
+  const stockTracked = item.stock !== null && item.stock !== undefined;
+  const isUnlimited  = item.stock === -1;
+  const inCart    = items.find((i) => i.id === item.id)?.qty ?? 0;
+  const available = isUnlimited ? Infinity : (stockTracked ? Math.max(0, item.stock - inCart) : Infinity);
+  const agotado   = !isUnlimited && stockTracked && item.stock === 0;
+  const atMax     = !isUnlimited && stockTracked && inCart >= item.stock;
+
+  useEffect(() => {
+    if (stockTracked && qty > available && available >= 1) setQty(available);
+    if (stockTracked && available === 0) setQty(1);
+  }, [available, stockTracked]);
+
+  const handleAdd = (qtyToAdd = 1) => {
+    if (agotado || atMax) return;
+    const r = addToCart(item, qtyToAdd);
+    if (r.authRequired) { setShowLogin(true); return; }
+    if (r.ok) { setAdded(true); setTimeout(() => { setAdded(false); setQty(1); }, 900); }
+  };
 
   if (!isDesktop) {
     return (
-      <TouchableOpacity
-        style={[styles.cardMobile, { width: cardWidth }]}
-        onPress={onPress}
-        activeOpacity={0.85}
-      >
-        {item.promo && (
-          <View style={styles.cardBadgeMobile}>
-            <Text style={styles.badgeText}>{item.promo}</Text>
-          </View>
-        )}
+      <>
         <TouchableOpacity
-          style={styles.heartBtnMobile}
-          onPress={(e) => { e.stopPropagation?.(); toggleWishlist(item); }}
-          activeOpacity={0.7}
-          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          style={[styles.cardMobile, { width: cardWidth, backgroundColor: t.card }]}
+          onPress={onPress}
+          activeOpacity={0.85}
         >
-          <Ionicons name={wishlisted ? "heart" : "heart-outline"} size={14} color={wishlisted ? RED : "#bbb"} />
-        </TouchableOpacity>
-        <View style={styles.cardImgBgMobile}>
-          <Image
-            source={{ uri: item.img }}
-            style={styles.cardImgMobile}
-            resizeMode="contain"
-          />
-        </View>
-        <View style={styles.cardInfoMobile}>
-          <Text style={styles.cardCatMobile}>{item.cat}</Text>
-          <Text style={styles.prodNameMobile} numberOfLines={1}>
-            {item.name}
-          </Text>
-          <View style={styles.cardFooterMobile}>
-            <Text style={styles.priceMobile}>{item.price}</Text>
-            <TouchableOpacity style={styles.addBtnMobile} onPress={(e) => { e.stopPropagation?.(); addToCart(item); }}>
-              <Ionicons name="add" size={16} color="white" />
-            </TouchableOpacity>
+          {item.promo && (
+            <View style={styles.cardBadgeMobile}>
+              <Text style={styles.badgeText}>{item.promo}</Text>
+            </View>
+          )}
+          <TouchableOpacity
+            style={styles.heartBtnMobile}
+            onPress={(e) => { e.stopPropagation?.(); toggleWishlist(item); }}
+            activeOpacity={0.7}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
+            <Ionicons name={wishlisted ? "heart" : "heart-outline"} size={14} color={wishlisted ? RED : "#bbb"} />
+          </TouchableOpacity>
+          <View style={[styles.cardImgBgMobile, { backgroundColor: "#fff" }]}>
+            <Image source={{ uri: item.img }} style={styles.cardImgMobile} resizeMode="contain" />
           </View>
-        </View>
-      </TouchableOpacity>
+          <View style={styles.cardInfoMobile}>
+            <Text style={[styles.cardCatMobile, { color: t.textMuted }]}>{item.cat}</Text>
+            <Text style={[styles.prodNameMobile, { color: t.text }]} numberOfLines={1}>{item.name}</Text>
+            <Text style={styles.priceMobile}>{item.price}</Text>
+            {stockTracked && item.stock > 0 && item.stock <= 5 && (
+              <Text style={{ fontSize: 9, color: "#e65100", fontWeight: "700", marginTop: 1 }}>
+                ¡Solo quedan {item.stock}!
+              </Text>
+            )}
+            <View style={styles.cardFooterMobile}>
+              <View style={[styles.mobileQtyRowHome, { backgroundColor: t.iconBg }]}>
+                <TouchableOpacity
+                  style={[styles.mobileQtyBtnHome, { backgroundColor: t.card }]}
+                  onPress={(e) => { e.stopPropagation?.(); setQty(q => Math.max(1, q - 1)); }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.mobileQtyBtnTextHome, { color: t.text }]}>−</Text>
+                </TouchableOpacity>
+                <Text style={[styles.mobileQtyTextHome, { color: t.text }]}>{qty}</Text>
+                <TouchableOpacity
+                  style={[styles.mobileQtyBtnHome, { backgroundColor: t.card }, (atMax || qty >= available) && { opacity: 0.35 }]}
+                  onPress={(e) => {
+                    e.stopPropagation?.();
+                    if (stockTracked && qty >= available) return;
+                    setQty(q => q + 1);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.mobileQtyBtnTextHome, { color: t.text }]}>+</Text>
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity
+                style={[styles.addBtnMobile, added && { backgroundColor: "#4caf50" }, (agotado || atMax) && { backgroundColor: "#ccc" }]}
+                onPress={(e) => { e.stopPropagation?.(); handleAdd(qty); }}
+                disabled={agotado || atMax}
+              >
+                <Ionicons name={added ? "checkmark" : agotado || atMax ? "ban-outline" : "cart-outline"} size={14} color="white" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+        <LoginPromptSheet visible={showLogin} onClose={() => setShowLogin(false)} />
+      </>
     );
   }
 
   return (
-    <View style={[styles.cardDesktop, { width: cardWidth }]}>
-      {item.promo && (
-        <View style={styles.cardBadge}>
-          <Text style={styles.badgeText}>{item.promo}</Text>
-        </View>
-      )}
-      <TouchableOpacity
-        style={styles.heartBtn}
-        onPress={(e) => { e.stopPropagation?.(); toggleWishlist(item); }}
-        activeOpacity={0.7}
-      >
-        <Ionicons name={wishlisted ? "heart" : "heart-outline"} size={18} color={wishlisted ? RED : "#999"} />
-      </TouchableOpacity>
-      <Image
-        source={{ uri: item.img }}
-        style={styles.cardImgDesktop}
-        resizeMode="contain"
-      />
-      <Text style={styles.cardCatDesktop}>{item.cat}</Text>
-      <Text style={styles.prodNameDesktop}>{item.name}</Text>
-      <Text style={styles.priceDesktop}>{item.price}</Text>
-      <View style={styles.cardFooterDesktop}>
-        <View style={styles.qtyControl}>
-          <TouchableOpacity onPress={() => setQty(Math.max(1, qty - 1))}>
-            <Text style={styles.qtyBtn}>-</Text>
-          </TouchableOpacity>
-          <Text style={styles.qtyText}>{qty}</Text>
-          <TouchableOpacity onPress={() => setQty(qty + 1)}>
-            <Text style={styles.qtyBtn}>+</Text>
-          </TouchableOpacity>
-        </View>
-        <TouchableOpacity style={styles.addBtnDesktop} onPress={() => addToCart(item)}>
-          <Ionicons name="add" size={18} color="white" />
+    <>
+      <TouchableOpacity style={[styles.cardDesktop, { width: cardWidth, backgroundColor: t.card, borderColor: t.border }]} onPress={onPress} activeOpacity={0.9}>
+        {item.promo && (
+          <View style={styles.cardBadge}>
+            <Text style={styles.badgeText}>{item.promo}</Text>
+          </View>
+        )}
+        <TouchableOpacity
+          style={styles.heartBtn}
+          onPress={(e) => { e.stopPropagation?.(); toggleWishlist(item); }}
+          activeOpacity={0.7}
+        >
+          <Ionicons name={wishlisted ? "heart" : "heart-outline"} size={18} color={wishlisted ? RED : "#999"} />
         </TouchableOpacity>
-      </View>
-    </View>
+        <Image source={{ uri: item.img }} style={styles.cardImgDesktop} resizeMode="contain" />
+        <Text style={[styles.cardCatDesktop, { color: t.textMuted }]}>{item.cat}</Text>
+        <Text style={[styles.prodNameDesktop, { color: t.text }]}>{item.name}</Text>
+        <Text style={styles.priceDesktop}>{item.price}</Text>
+        {stockTracked && item.stock > 0 && item.stock <= 5 && (
+          <Text style={{ fontSize: 10, color: "#e65100", fontWeight: "700", marginBottom: 2 }}>
+            ¡Solo quedan {item.stock}!
+          </Text>
+        )}
+        <View style={styles.cardFooterDesktop}>
+          <View style={[styles.qtyControl, { backgroundColor: t.iconBg }]}>
+            <TouchableOpacity onPress={(e) => { e.stopPropagation?.(); setQty(q => Math.max(1, q - 1)); }}>
+              <Text style={styles.qtyBtn}>−</Text>
+            </TouchableOpacity>
+            <Text style={[styles.qtyText, { color: t.text }]}>{qty}</Text>
+            <TouchableOpacity
+              onPress={(e) => {
+                e.stopPropagation?.();
+                if (stockTracked && qty >= available) return;
+                setQty(q => q + 1);
+              }}
+              style={(stockTracked && qty >= available) ? { opacity: 0.3 } : {}}
+            >
+              <Text style={styles.qtyBtn}>+</Text>
+            </TouchableOpacity>
+          </View>
+          <TouchableOpacity
+            style={[styles.addBtnDesktop, (agotado || atMax) && { backgroundColor: "#ccc" }]}
+            onPress={(e) => { e.stopPropagation?.(); handleAdd(qty); }}
+            disabled={agotado || atMax}
+          >
+            <Ionicons name={added ? "checkmark" : agotado || atMax ? "ban-outline" : "add"} size={18} color="white" />
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+      <LoginPromptSheet visible={showLogin} onClose={() => setShowLogin(false)} />
+    </>
   );
 }
 
@@ -229,6 +295,7 @@ function SearchBar({ products = [], onSelect, isDesktop }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [focused, setFocused] = useState(false);
+  const { t } = useTheme();
 
   const handleChange = (text) => {
     setQuery(text);
@@ -257,27 +324,27 @@ function SearchBar({ products = [], onSelect, isDesktop }) {
   const showDropdown = focused && results.length > 0;
 
   const dropdown = showDropdown ? (
-    <View style={isDesktop ? searchStyles.desktopDropdown : searchStyles.mobileDropdown}>
+    <View style={[isDesktop ? searchStyles.desktopDropdown : searchStyles.mobileDropdown, { backgroundColor: t.card, borderColor: t.border }]}>
       {results.map((item) => (
         <TouchableOpacity
           key={item.id}
-          style={searchStyles.resultItem}
+          style={[searchStyles.resultItem, { borderBottomColor: t.divider }]}
           onPress={() => handleSelect(item)}
         >
           {item.img ? (
             <Image
               source={{ uri: item.img }}
-              style={searchStyles.resultImg}
+              style={[searchStyles.resultImg, { backgroundColor: "#fff" }]}
               resizeMode="contain"
             />
           ) : (
-            <View style={[searchStyles.resultImg, { backgroundColor: "#f5f5f5" }]} />
+            <View style={[searchStyles.resultImg, { backgroundColor: t.input }]} />
           )}
           <View style={{ flex: 1 }}>
-            <Text style={searchStyles.resultName} numberOfLines={1}>
+            <Text style={[searchStyles.resultName, { color: t.text }]} numberOfLines={1}>
               {item.name}
             </Text>
-            <Text style={searchStyles.resultCat}>{item.cat}</Text>
+            <Text style={[searchStyles.resultCat, { color: t.textMuted }]}>{item.cat}</Text>
           </View>
           <Text style={searchStyles.resultPrice}>{item.price}</Text>
         </TouchableOpacity>
@@ -287,13 +354,14 @@ function SearchBar({ products = [], onSelect, isDesktop }) {
 
   if (isDesktop) {
     return (
-      <View style={[styles.desktopSearch, { zIndex: 200 }]}>
-        <Ionicons name="search" size={18} color="#999" style={{ marginLeft: 16 }} />
+      <View style={[styles.desktopSearch, { zIndex: 200, backgroundColor: t.input }]}>
+        <Ionicons name="search" size={18} color={t.textMuted} style={{ marginLeft: 16 }} />
         <TextInput
           value={query}
           onChangeText={handleChange}
           placeholder="Escribe lo que necesitas..."
-          style={styles.desktopSearchInput}
+          placeholderTextColor={t.placeholder}
+          style={[styles.desktopSearchInput, { color: t.text }]}
           onFocus={() => setFocused(true)}
           onBlur={() => setTimeout(() => setFocused(false), 200)}
         />
@@ -315,14 +383,14 @@ function SearchBar({ products = [], onSelect, isDesktop }) {
 
   return (
     <View style={{ flex: 1, zIndex: 200 }}>
-      <View style={styles.mobileSearch}>
-        <Ionicons name="search" size={18} color="#999" style={{ marginLeft: 12 }} />
+      <View style={[styles.mobileSearch, { backgroundColor: t.input }]}>
+        <Ionicons name="search" size={18} color={t.textMuted} style={{ marginLeft: 12 }} />
         <TextInput
           value={query}
           onChangeText={handleChange}
           placeholder="Escribe lo que necesitas..."
-          style={styles.mobileSearchInput}
-          placeholderTextColor="#999"
+          style={[styles.mobileSearchInput, { color: t.text }]}
+          placeholderTextColor={t.placeholder}
           onFocus={() => setFocused(true)}
           onBlur={() => setTimeout(() => setFocused(false), 200)}
         />
@@ -396,26 +464,29 @@ const searchStyles = StyleSheet.create({
 });
 
 // ─── DESKTOP NAVBAR (STICKY) ──────────────────────────────────────────────────
-export function DesktopNav({ onHomePress, onCartPress, onStorePress, onOrdersPress, onProfilePress, products, onProductSelect, onSettingsPress, activeTabIndex = 0 }) {
+export function DesktopNav({ onHomePress, onCartPress, onStorePress, onOrdersPress, onProfilePress, products, onProductSelect, onSettingsPress, activeTabIndex = 0, onNotifPress, unreadCount = 0, onFavPress }) {
   const { count } = useCart();
+  const { wishlist } = useWishlist();
   const { user, signOut, signInWithGoogle } = useAuth();
+  const { t } = useTheme();
   const [menuOpen, setMenuOpen] = useState(false);
 
   const firstName = user?.givenName || user?.name?.split(" ")[0] || user?.email?.split("@")[0] || "Mi cuenta";
+  const favCount = wishlist?.length || 0;
 
   return (
-    <View style={[styles.desktopNav, { zIndex: 200 }]}>
+    <View style={[styles.desktopNav, { zIndex: 200, backgroundColor: t.header, borderBottomColor: t.border }]}>
       <View style={[styles.desktopNavInner, styles.centeredContainer]}>
         <View style={styles.navLeft}>
           <Image source={require("../assets/images/logo.png")} style={styles.navLogo} resizeMode="contain" />
           <TouchableOpacity style={styles.navLink} onPress={onHomePress}>
-            <Text style={[styles.navLinkText, activeTabIndex === 0 && { color: RED }]}>INICIO</Text>
+            <Text style={[styles.navLinkText, { color: t.text }, activeTabIndex === 0 && { color: RED }]}>INICIO</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.navLink} onPress={onStorePress}>
-            <Text style={[styles.navLinkText, activeTabIndex === 1 && { color: RED }]}>TIENDA</Text>
+            <Text style={[styles.navLinkText, { color: t.text }, activeTabIndex === 1 && { color: RED }]}>TIENDA</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.navLink} onPress={onOrdersPress}>
-            <Text style={[styles.navLinkText, activeTabIndex === 2 && { color: RED }]}>PEDIDOS</Text>
+            <Text style={[styles.navLinkText, { color: t.text }, activeTabIndex === 2 && { color: RED }]}>PEDIDOS</Text>
           </TouchableOpacity>
         </View>
 
@@ -424,9 +495,33 @@ export function DesktopNav({ onHomePress, onCartPress, onStorePress, onOrdersPre
         </View>
 
         <View style={styles.navRight}>
+          {/* Favoritos */}
+          <TouchableOpacity style={styles.navIconBtn} onPress={onFavPress}>
+            <View style={{ position: "relative" }}>
+              <Ionicons name="heart" size={24} color={favCount > 0 ? RED : t.text} />
+              {favCount > 0 && (
+                <View style={styles.navCartBadge}>
+                  <Text style={styles.navCartBadgeText}>{favCount}</Text>
+                </View>
+              )}
+            </View>
+          </TouchableOpacity>
+
+          {/* Campana de notificaciones */}
+          <TouchableOpacity style={styles.navIconBtn} onPress={onNotifPress}>
+            <View style={{ position: "relative" }}>
+              <Ionicons name="notifications" size={24} color={t.text} />
+              {unreadCount > 0 && (
+                <View style={styles.navCartBadge}>
+                  <Text style={styles.navCartBadgeText}>{unreadCount > 9 ? "9+" : unreadCount}</Text>
+                </View>
+              )}
+            </View>
+          </TouchableOpacity>
+
           <TouchableOpacity style={styles.navIconBtn} onPress={onCartPress}>
             <View style={{ position: "relative" }}>
-              <Ionicons name="cart-sharp" size={24} color="#333" />
+              <Ionicons name="cart-sharp" size={24} color={t.text} />
               {count > 0 && (
                 <View style={styles.navCartBadge}>
                   <Text style={styles.navCartBadgeText}>{count > 9 ? "9+" : count}</Text>
@@ -439,7 +534,7 @@ export function DesktopNav({ onHomePress, onCartPress, onStorePress, onOrdersPre
             <View style={{ position: "relative", zIndex: 300 }}>
               {/* Botón perfil — abre dropdown */}
               <TouchableOpacity
-                style={[styles.userNavBtn, menuOpen && { backgroundColor: "#f5f5f5" }]}
+                style={[styles.userNavBtn, { backgroundColor: t.iconBg }, menuOpen && { backgroundColor: t.cardAlt }]}
                 onPress={() => setMenuOpen((v) => !v)}
                 activeOpacity={0.85}
               >
@@ -448,7 +543,7 @@ export function DesktopNav({ onHomePress, onCartPress, onStorePress, onOrdersPre
                     {(user.givenName || user.name || "U")[0].toUpperCase()}
                   </Text>
                 </View>
-                <Text style={styles.userNavName} numberOfLines={1}>{firstName}</Text>
+                <Text style={[styles.userNavName, { color: t.text }]} numberOfLines={1}>{firstName}</Text>
                 <Ionicons
                   name={menuOpen ? "chevron-up" : "chevron-down"}
                   size={13}
@@ -580,17 +675,19 @@ const navDropdown = StyleSheet.create({
 });
 
 // ─── MOBILE FIXED HEADER ──────────────────────────────────────────────────────
-export function MobileHeader({ onCartPress, products, onProductSelect }) {
+export function MobileHeader({ onFavPress, onCartPress, cartCount = 0, products, onProductSelect, onFilterPress, onNotifPress, unreadCount = 0 }) {
   const { top: safeTop } = useSafeAreaInsets();
-  const { count } = useCart();
-  const { address, coords, deliveryAddress, setDeliveryAddress, loading: locLoading, requestLocation } = useLocation();
+  const { wishlist } = useWishlist();
+  const { address, coords, deliveryAddress, setDeliveryAddress, setDeliveryCoords, loading: locLoading, requestLocation } = useLocation();
   const { user } = useAuth();
+  const { t } = useTheme();
   const [pickerVisible, setPickerVisible] = useState(false);
 
   const displayAddress = deliveryAddress || address;
+  const favCount = wishlist?.length || 0;
 
   return (
-    <View style={[styles.mobileHeaderFixed, { paddingTop: Math.max(safeTop, 20) }]}>
+    <View style={[styles.mobileHeaderFixed, { paddingTop: Math.max(safeTop, 20), backgroundColor: t.header, borderBottomColor: t.border }]}>
       {/* Fila superior: ubicación + íconos */}
       <View style={styles.mobileHeaderTop}>
         <TouchableOpacity
@@ -600,10 +697,10 @@ export function MobileHeader({ onCartPress, products, onProductSelect }) {
         >
           <Ionicons name="location-sharp" size={22} color={RED} />
           <View style={{ flex: 1, paddingHorizontal: 8 }}>
-            <Text style={styles.mobileWelcome}>
+            <Text style={[styles.mobileWelcome, { color: t.text }]}>
               {user ? `HOLA, ${(user.givenName || user.name || user.email?.split('@')[0] || "USUARIO").toUpperCase()}` : "ENTREGAR EN"}
             </Text>
-            <Text style={styles.mobileAddress} numberOfLines={1}>
+            <Text style={[styles.mobileAddress, { color: t.textMuted }]} numberOfLines={1}>
               {locLoading ? "Detectando ubicación..." : (displayAddress || "Selecciona tu dirección ›")}
             </Text>
           </View>
@@ -611,19 +708,29 @@ export function MobileHeader({ onCartPress, products, onProductSelect }) {
         </TouchableOpacity>
 
         <View style={styles.mobileHeaderIcons}>
-          <TouchableOpacity style={styles.headerIconBtn} onPress={onCartPress}>
-            <Ionicons name="cart" size={26} color="#000" />
-            {count > 0 && (
+          <TouchableOpacity style={styles.headerIconBtn} onPress={onFavPress}>
+            <Ionicons name="heart" size={24} color={favCount > 0 ? RED : t.text} />
+            {favCount > 0 && (
               <View style={styles.cartBadge}>
-                <Text style={styles.cartBadgeText}>{count > 9 ? "9+" : count}</Text>
+                <Text style={styles.cartBadgeText}>{favCount > 9 ? "9+" : favCount}</Text>
               </View>
             )}
           </TouchableOpacity>
-          <TouchableOpacity style={styles.headerIconBtn}>
-            <View style={styles.bellBadge}>
-              <Text style={styles.bellBadgeText}>5</Text>
-            </View>
-            <Ionicons name="notifications" size={24} color="#000" />
+          <TouchableOpacity style={styles.headerIconBtn} onPress={onCartPress}>
+            <Ionicons name="cart" size={24} color={t.text} />
+            {cartCount > 0 && (
+              <View style={styles.cartBadge}>
+                <Text style={styles.cartBadgeText}>{cartCount > 9 ? "9+" : cartCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.headerIconBtn} onPress={onNotifPress}>
+            <Ionicons name="notifications" size={24} color={t.text} />
+            {unreadCount > 0 && (
+              <View style={styles.bellBadge}>
+                <Text style={styles.bellBadgeText}>{unreadCount > 9 ? "9+" : unreadCount}</Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
       </View>
@@ -631,7 +738,11 @@ export function MobileHeader({ onCartPress, products, onProductSelect }) {
       {/* Fila de búsqueda */}
       <View style={[styles.mobileSearchRow, { zIndex: 200 }]}>
         <SearchBar products={products} onSelect={onProductSelect} isDesktop={false} />
-        <TouchableOpacity style={styles.filterBtn}>
+        <TouchableOpacity
+          style={[styles.filterBtn, !onFilterPress && { opacity: 0.45 }]}
+          onPress={onFilterPress || undefined}
+          activeOpacity={0.8}
+        >
           <Ionicons name="options" size={20} color="#fff" />
         </TouchableOpacity>
       </View>
@@ -640,7 +751,7 @@ export function MobileHeader({ onCartPress, products, onProductSelect }) {
       <LocationPickerModal
         visible={pickerVisible}
         onClose={() => setPickerVisible(false)}
-        onConfirm={(addr) => setDeliveryAddress(addr)}
+        onConfirm={(addr, pickedCoords) => { setDeliveryAddress(addr); setDeliveryCoords(pickedCoords); }}
         currentCoords={coords}
       />
     </View>
@@ -648,22 +759,50 @@ export function MobileHeader({ onCartPress, products, onProductSelect }) {
 }
 
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
-export default function RappiStore({ onCartPress, onStorePress, onOrdersPress, onProfilePress, onSettingsPress }) {
+export default function RappiStore({ onCartPress, onStorePress, onOrdersPress, onProfilePress, onSettingsPress, onCategoryPress }) {
   const { width } = useWindowDimensions();
-  const { top: safeTop } = useSafeAreaInsets();
+  const { top: safeTop, bottom: safeBottom } = useSafeAreaInsets();
+  const { t } = useTheme();
   const isDesktop = width >= 1024;
   const { categories, allProducts, featuredProducts, promos, productsLoading, productsError, reload } = useHomeData();
-  const { address, coords, deliveryAddress, setDeliveryAddress, requestLocation, resetDeliveryAddress } = useLocation();
-  const [showAllCats, setShowAllCats] = useState(false);
+  const { address, coords, deliveryAddress, setDeliveryAddress, setDeliveryCoords, requestLocation, resetDeliveryAddress } = useLocation();
   const [locationPickerVisible, setLocationPickerVisible] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
+  const [activePromoIdx, setActivePromoIdx] = useState(0);
+  const promoScrollRef = React.useRef(null);
 
+  // Derivadas del carrusel — deben declararse ANTES de los useEffects que las usan
   const desktopCardWidth = 210;
   const gap = 16;
   const mobileCardWidth = (width - 16 * 2 - gap) / 2;
+  const carouselW = Math.min(width, 1200);
+  // 44px flecha × 2 + 8px margen × 2 + 16px gap entre banners = 120
+  const desktopBannerW = Math.round((carouselW - 120) / 2);
+  const desktopBannerH = Math.min(300, Math.round(desktopBannerW * 0.52));
+  const desktopScrollStep = desktopBannerW + 16;
+
+  // Auto-play carrusel
+  React.useEffect(() => {
+    if (isDesktop && promos.length > 1) {
+      const interval = setInterval(() => {
+        setActivePromoIdx((prev) => (prev + 1) % promos.length);
+      }, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [isDesktop, promos.length]);
+
+  // Desplazamiento suave al cambiar slide
+  React.useEffect(() => {
+    if (isDesktop && promoScrollRef.current && promos.length > 0) {
+      promoScrollRef.current.scrollTo({
+        x: activePromoIdx * desktopScrollStep,
+        animated: true,
+      });
+    }
+  }, [activePromoIdx, isDesktop, promos.length, desktopScrollStep]);
 
   return (
-    <View style={styles.mainWrapper}>
+    <View style={[styles.mainWrapper, { backgroundColor: t.bg }]}>
       {/* Navbar fija PC */}
       {/* DesktopNav is rendered globally in App.js */}
 
@@ -673,7 +812,7 @@ export default function RappiStore({ onCartPress, onStorePress, onOrdersPress, o
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{
           paddingTop: isDesktop ? 0 : Math.max(safeTop, 20) + MOBILE_HEADER_FIXED + 8,
-          paddingBottom: 40,
+          paddingBottom: isDesktop ? 40 : safeBottom + 84,
         }}
       >
         {/* ── BANNER PRINCIPAL ── */}
@@ -734,7 +873,7 @@ export default function RappiStore({ onCartPress, onStorePress, onOrdersPress, o
                     popup
                     visible={locationPickerVisible}
                     onClose={() => setLocationPickerVisible(false)}
-                    onConfirm={(addr) => { setDeliveryAddress(addr); setLocationPickerVisible(false); }}
+                    onConfirm={(addr, pickedCoords) => { setDeliveryAddress(addr); setDeliveryCoords(pickedCoords); setLocationPickerVisible(false); }}
                     currentCoords={coords}
                   />
                 </View>
@@ -764,72 +903,59 @@ export default function RappiStore({ onCartPress, onStorePress, onOrdersPress, o
         )}
 
         {/* ── CATEGORÍAS ── */}
-        <View
-          style={[
-            isDesktop ? styles.sectionDesktopWrap : styles.sectionMobileWrap,
-            isDesktop && styles.centeredContainer,
-          ]}
-        >
-          <View style={styles.catHeader}>
-            <Text
-              style={
-                isDesktop
-                  ? styles.sectionTitleDesktop
-                  : styles.sectionTitleMobile
-              }
-            >
-              {isDesktop ? "TODO POR CATEGORÍA" : "CATEGORÍA"}
-            </Text>
-            <TouchableOpacity
-              style={
-                isDesktop ? styles.todasBtnDesktop : styles.verTodoBtnMobile
-              }
-              onPress={() => setShowAllCats(v => !v)}
-            >
-              <Text
-                style={
-                  isDesktop
-                    ? styles.todasBtnTextDesktop
-                    : styles.verTodoTextMobile
-                }
+        {isDesktop ? (
+          <View style={[styles.sectionDesktopWrap, styles.centeredContainer]}>
+            <View style={styles.catHeader}>
+              <Text style={[styles.sectionTitleDesktop, { color: t.text }]}>TODO POR CATEGORÍA</Text>
+              <TouchableOpacity
+                style={styles.todasBtnDesktop}
+                onPress={() => onCategoryPress?.("all")}
               >
-                {showAllCats ? "CERRAR ▲" : (isDesktop ? "TODAS >" : "VER TODO")}
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {isDesktop ? (
+                <Text style={styles.todasBtnTextDesktop}>TODAS &gt;</Text>
+              </TouchableOpacity>
+            </View>
             <View style={styles.catRowDesktop}>
-              {categories.map((cat, i) => (
-                <TouchableOpacity key={i} style={styles.catItemDesktop}>
+              {categories.slice(0, 7).map((cat, i) => (
+                <TouchableOpacity
+                  key={i}
+                  style={[styles.catItemDesktop, { backgroundColor: "#fff", borderColor: t.border }]}
+                  onPress={() => onCategoryPress?.(cat.name)}
+                  activeOpacity={0.8}
+                >
                   <Image
                     source={{ uri: cat.img }}
                     style={styles.catImgDesktop}
                     resizeMode="contain"
                   />
-                  <Text style={styles.catLabelDesktop}>
+                  <Text style={[styles.catLabelDesktop, { color: t.text }]}>
                     {cat.label.toUpperCase()}
                   </Text>
                 </TouchableOpacity>
               ))}
             </View>
-          ) : (
-            <View style={styles.catGridMobile}>
-              {(showAllCats ? categories : categories.slice(0, 4)).map((cat, i) => (
-                <TouchableOpacity key={i} style={styles.catItemMobile}>
-                  <Image
-                    source={{ uri: cat.img }}
-                    style={styles.catImgMobile}
-                    resizeMode="contain"
-                  />
-                  <View style={styles.catPillMobile}>
-                    <Text style={styles.catPillTextMobile}>{cat.label}</Text>
-                  </View>
+          </View>
+        ) : (
+          <View style={styles.sectionMobileWrap}>
+            <Text style={[styles.sectionTitleMobile, { marginBottom: 12, color: t.text }]}>CATEGORÍAS</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ marginHorizontal: -16 }}
+              contentContainerStyle={styles.catScrollMobile}
+            >
+              {categories.map((cat, i) => (
+                <TouchableOpacity
+                  key={i}
+                  style={[styles.catPillChip, { backgroundColor: t.card, borderColor: t.border }]}
+                  onPress={() => onCategoryPress?.(cat.name)}
+                  activeOpacity={0.75}
+                >
+                  <Text style={[styles.catPillChipText, { color: t.text }]}>{cat.label}</Text>
                 </TouchableOpacity>
               ))}
-            </View>
-          )}
-        </View>
+            </ScrollView>
+          </View>
+        )}
 
         {/* ── LO MÁS COMPRADO ── */}
         <View
@@ -843,7 +969,7 @@ export default function RappiStore({ onCartPress, onStorePress, onOrdersPress, o
               isDesktop
                 ? styles.sectionTitleDesktop
                 : styles.sectionTitleMobile,
-              { marginBottom: 16, paddingHorizontal: isDesktop ? 0 : 16 },
+              { marginBottom: 16, paddingHorizontal: isDesktop ? 0 : 16, color: t.text },
             ]}
           >
             {isDesktop ? "LO MÁS COMPRADO" : "LO MÁS PEDIDO"}
@@ -872,17 +998,18 @@ export default function RappiStore({ onCartPress, onStorePress, onOrdersPress, o
               {productsLoading ? (
                 <View style={{ alignItems: "center", paddingVertical: 32 }}>
                   <ActivityIndicator size="large" color={RED} />
-                  <Text style={{ color: "#aaa", marginTop: 10, fontSize: 13 }}>Cargando productos...</Text>
+                  <Text style={{ color: t.textMuted, marginTop: 10, fontSize: 13 }}>Cargando productos...</Text>
                 </View>
               ) : productsError ? (
-                <View style={{ alignItems: "center", paddingVertical: 28, paddingHorizontal: 24 }}>
-                  <Ionicons name="wifi-outline" size={40} color="#ddd" />
-                  <Text style={{ color: "#aaa", marginTop: 10, fontSize: 13, textAlign: "center" }}>{productsError}</Text>
-                  <TouchableOpacity
-                    onPress={reload}
-                    style={{ marginTop: 14, backgroundColor: RED, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 10 }}
-                  >
-                    <Text style={{ color: "#fff", fontWeight: "800", fontSize: 13 }}>Reintentar</Text>
+                <View style={styles.errorState}>
+                  <View style={styles.errorIconCircle}>
+                    <Ionicons name="storefront-outline" size={38} color={RED} />
+                  </View>
+                  <Text style={[styles.errorTitle, { color: t.text }]}>No pudimos cargar los productos</Text>
+                  <Text style={[styles.errorSubtitle, { color: t.textMuted }]}>Revisa tu conexión e intenta de nuevo</Text>
+                  <TouchableOpacity onPress={reload} style={styles.retryBtn} activeOpacity={0.85}>
+                    <Ionicons name="refresh-outline" size={16} color="#fff" />
+                    <Text style={styles.retryBtnText}>Reintentar</Text>
                   </TouchableOpacity>
                 </View>
               ) : (
@@ -921,24 +1048,78 @@ export default function RappiStore({ onCartPress, onStorePress, onOrdersPress, o
           )}
         </View>
 
-        {/* ── CARRUSEL BANNERS PROMOCIONES (desde API) ── */}
+        {/* ── CARRUSEL BANNERS PROMOCIONES ── */}
         {promos.length > 0 && (
-          <View style={[styles.promoCarouselContainer, isDesktop && styles.centeredContainer]}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={isDesktop ? { gap: 20 } : styles.promoBannersScrollMobile}
-            >
-              {promos.map(p => (
-                  <TouchableOpacity key={p.id} activeOpacity={0.92}>
+          <View style={styles.promoCarouselContainer}>
+            {isDesktop ? (
+              <View style={{ width: carouselW, alignSelf: "center" }}>
+                {/* Fila: [← flecha] [banners] [flecha →] */}
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  <TouchableOpacity
+                    style={[styles.carouselNavBtn, { marginRight: 8, opacity: promos.length > 1 ? 1 : 0 }]}
+                    onPress={() => setActivePromoIdx(prev => (prev - 1 + promos.length) % promos.length)}
+                    disabled={promos.length <= 1}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="chevron-back" size={22} color="#fff" />
+                  </TouchableOpacity>
+
+                  <ScrollView
+                    ref={promoScrollRef}
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    scrollEnabled={false}
+                    style={{ flex: 1, height: desktopBannerH }}
+                    contentContainerStyle={{ gap: 16 }}
+                  >
+                    {promos.map((p, idx) => (
+                      <Image
+                        key={`${p.id}-${idx}`}
+                        source={{ uri: p.image_url }}
+                        style={{ width: desktopBannerW, height: desktopBannerH, borderRadius: 16 }}
+                        resizeMode="cover"
+                      />
+                    ))}
+                  </ScrollView>
+
+                  <TouchableOpacity
+                    style={[styles.carouselNavBtn, { marginLeft: 8, opacity: promos.length > 1 ? 1 : 0 }]}
+                    onPress={() => setActivePromoIdx(prev => (prev + 1) % promos.length)}
+                    disabled={promos.length <= 1}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="chevron-forward" size={22} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+
+                {/* Dots debajo */}
+                <View style={styles.promoDotsRow}>
+                  {promos.map((_, i) => (
+                    <TouchableOpacity
+                      key={i}
+                      onPress={() => setActivePromoIdx(i)}
+                      style={[styles.promoDot, activePromoIdx === i && styles.promoDotActive]}
+                    />
+                  ))}
+                </View>
+              </View>
+            ) : (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.promoBannersScrollMobile}
+              >
+                {promos.map((p, idx) => (
+                  <TouchableOpacity key={`${p.id}-${idx}`} activeOpacity={0.92}>
                     <Image
                       source={{ uri: p.image_url }}
-                      style={isDesktop ? styles.promoImgDesktop : styles.promoImgMobile}
+                      style={styles.promoImgMobile}
                       resizeMode="cover"
                     />
                   </TouchableOpacity>
                 ))}
-            </ScrollView>
+              </ScrollView>
+            )}
           </View>
         )}
 
@@ -946,7 +1127,7 @@ export default function RappiStore({ onCartPress, onStorePress, onOrdersPress, o
         {/* ── SOLO PC: MARCAS DESTACADAS (carga desde Cloudinary) ── */}
         {isDesktop && (
           <View style={[styles.brandsSection, styles.centeredContainer]}>
-            <Text style={styles.sectionTitleDesktop}>MARCAS DESTACADAS</Text>
+            <Text style={[styles.sectionTitleDesktop, { color: t.text }]}>MARCAS DESTACADAS</Text>
             <View style={styles.brandsCarouselWrap}>
               <TouchableOpacity
                 style={[styles.carouselArrow, { backgroundColor: RED }]}
@@ -959,7 +1140,7 @@ export default function RappiStore({ onCartPress, onStorePress, onOrdersPress, o
                 contentContainerStyle={styles.brandsScroll}
               >
                 {BRANDS.map((brand, index) => (
-                  <View key={index} style={styles.brandLogoWrap}>
+                  <View key={index} style={[styles.brandLogoWrap, { backgroundColor: t.card, borderColor: t.border }]}>
                     <Image
                       source={{ uri: brand.img }}
                       style={styles.brandLogo}
@@ -1424,28 +1605,25 @@ const styles = StyleSheet.create({
   verTodoTextMobile: { color: "#fff", fontWeight: "800", fontSize: 11 },
 
   // ── CATEGORÍAS ────────────────────────────────────────────────────────────────
-  catGridMobile: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "space-between",
-    gap: 10,
+  catScrollMobile: {
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 4,
   },
-  catItemMobile: {
-    width: "22%",
-    alignItems: "center",
-    paddingBottom: 18,
-    position: "relative",
+  catPillChip: {
+    backgroundColor: "#fff",
+    borderWidth: 1.5,
+    borderColor: "#e8e8e8",
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  catImgMobile: { width: "100%", height: 68 },
-  catPillMobile: {
-    position: "absolute",
-    bottom: 0,
-    backgroundColor: RED,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 12,
-  },
-  catPillTextMobile: { color: "#fff", fontSize: 9, fontWeight: "900" },
+  catPillChipText: { fontSize: 13, fontWeight: "700", color: "#222" },
   catRowDesktop: {
     flexDirection: "row",
     paddingVertical: 10,
@@ -1490,6 +1668,48 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     textAlign: "center",
   },
+
+  // ── ERROR STATE ───────────────────────────────────────────────────────────────
+  errorState: {
+    alignItems: "center",
+    paddingVertical: 40,
+    paddingHorizontal: 32,
+  },
+  errorIconCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "#fff5f5",
+    borderWidth: 2,
+    borderColor: "#ffd0d4",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 18,
+  },
+  errorTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#222",
+    textAlign: "center",
+    marginBottom: 6,
+  },
+  errorSubtitle: {
+    fontSize: 13,
+    color: "#999",
+    textAlign: "center",
+    marginBottom: 22,
+    lineHeight: 19,
+  },
+  retryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: RED,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 24,
+  },
+  retryBtnText: { color: "#fff", fontWeight: "800", fontSize: 14 },
 
   // ── PRODUCTOS GRID MÓVIL ──────────────────────────────────────────────────────
   mobileProductsGrid: {
@@ -1548,14 +1768,29 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "900",
     color: "#000",
-    marginBottom: 8,
+    marginBottom: 2,
   },
   cardFooterMobile: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    marginTop: 6,
   },
-  priceMobile: { fontSize: 13, fontWeight: "900", color: RED },
+  priceMobile: { fontSize: 13, fontWeight: "900", color: RED, marginTop: 4 },
+  mobileQtyRowHome: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 8,
+    overflow: "hidden",
+  },
+  mobileQtyBtnHome: {
+    width: 24,
+    height: 24,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  mobileQtyBtnTextHome: { fontSize: 14, fontWeight: "700" },
+  mobileQtyTextHome: { width: 20, textAlign: "center", fontSize: 12, fontWeight: "700" },
   addBtnMobile: {
     backgroundColor: RED,
     width: 30,
@@ -1636,17 +1871,37 @@ const styles = StyleSheet.create({
   // ── PROMOS ────────────────────────────────────────────────────────────────────
   promoCarouselContainer: { marginTop: 24, marginBottom: 30 },
   promoBannersScrollMobile: { paddingHorizontal: 16, gap: 14 },
-  promoImgDesktop: {
-    width: 480,
-    height: 220,
-    borderRadius: 16,
-    backgroundColor: "#f0f0f0",
-  },
   promoImgMobile: {
-    width: 290,
-    height: 135,
+    width: 320,
+    height: 160,
     borderRadius: 14,
-    backgroundColor: "#f0f0f0",
+    borderWidth: 1,
+    borderColor: "#f0f0f0",
+  },
+  promoDotsRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 10,
+    marginTop: 14,
+  },
+  promoDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#ddd",
+  },
+  promoDotActive: {
+    width: 28,
+    backgroundColor: RED,
+  },
+  carouselNavBtn: {
+    backgroundColor: RED,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: "center",
+    alignItems: "center",
+    flexShrink: 0,
   },
 
   // ── MARCAS (con Cloudinary) ───────────────────────────────────────────────────
